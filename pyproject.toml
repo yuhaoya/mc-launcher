@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mclauncher"
+version = "1.0.0"
+description = "轻量 Minecraft 命令行启动器（纯标准库）"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+[project.scripts]
+mcl = "mclauncher.cli:main"
+
+[tool.setuptools]
+packages = ["mclauncher"]

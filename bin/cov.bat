@@ -1,0 +1,1 @@
+pyinstaller --noconfirm --onefile --windowed --icon "G:\vibe coding\mc-launcher\mclauncher\gui\assets\app.ico" --add-data "G:\vibe coding\mc-launcher\mclauncher;mclauncher/"  "G:\vibe coding\mc-launcher\mclauncher\mcl-gui.py"

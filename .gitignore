@@ -1,0 +1,35 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# 本地测试产生的目录与日志（不要提交几百 MB 的游戏文件）
+.test-mc/
+.test-config/
+.test-tmp/
+.test-install.log
+
+# 开发截图与探针产物
+.ui-*.png
+.ui-*.svg
+.ui-*.txt
+.test-pyside-install.log
+.test-wheels.log
+.idea/
+
+# 本地临时目录
+.build-tmp/
+.pysite/
+.wheels/
+.ui-demo/
+.ui-demo-config/
+.ui-light-config/
+
+# 本地缓存的版本清单（运行时会自动重新下载）
+mcl/cache/
+
+# 旧的 CLI 可执行文件（保留源码即可）
+bin/mcl.exe
