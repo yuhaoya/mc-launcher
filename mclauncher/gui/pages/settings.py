@@ -79,14 +79,18 @@ class SettingsPage(QWidget):
         content.addWidget(appearance)
 
         performance = SettingCardGroup("性能与启动", container)
-        self.memory_spin = SpinBox(container)
-        self.memory_spin.setRange(512, 32768)
-        self.memory_spin.setSingleStep(512)
-        self.memory_spin.setSuffix(" MB")
-        self.memory_spin.setFixedWidth(160)
+        # 删掉 SpinBox，换成 LineEdit
+        self.memory_input = LineEdit(container)
+        self.memory_input.setFixedWidth(160)
+        self.memory_input.setPlaceholderText("例如 4096")
+        # 只允许输入数字
+        from PySide6.QtGui import QIntValidator
+        self.memory_input.setValidator(QIntValidator(512, 32768, self))
+
         performance.addSettingCard(
-            SettingRow(FluentIcon.SPEED_HIGH, "最大内存", "分配给 Minecraft 的 JVM 堆上限，默认 4096 MB。", self.memory_spin)
+            SettingRow(FluentIcon.SPEED_HIGH, "最大内存 (MB)", "分配给 Minecraft 的 JVM 堆上限，默认 4096。", self.memory_input)
         )
+
 
         self.java_combo = ComboBox(container)
         self.java_combo.addItem("自动选择（推荐）", "")
@@ -169,10 +173,13 @@ class SettingsPage(QWidget):
             self.game_dir_input.setText(chosen)
 
     def _save(self) -> None:
+        mem_text = self.memory_input.text().strip()
+        memory_mb = int(mem_text) if mem_text.isdigit() else 4096
+
         values = {
             "theme": self.theme_combo.currentData(),
             "accent": self.accent_combo.currentData(),
-            "memory_mb": self.memory_spin.value(),
+            "memory_mb": memory_mb,
             "java_path": self.java_combo.currentData() or "",
             "game_dir": self.game_dir_input.text().strip(),
             "offline_name": self.offline_input.text().strip(),
@@ -184,7 +191,7 @@ class SettingsPage(QWidget):
         settings = self.service.settings()
         self.theme_combo.setCurrentIndex(max(0, self.theme_combo.findData(settings.get("theme"))))
         self.accent_combo.setCurrentIndex(max(0, self.accent_combo.findData(settings.get("accent"))))
-        self.memory_spin.setValue(int(settings.get("memory_mb") or 4096))
+        self.memory_input.setText(str(settings.get("memory_mb") or 4096))
         self.game_dir_input.setText(str(settings.get("game_dir") or ""))
         self.config_dir_label.setText(str(settings.get("config_dir") or ""))
         self.isolate_switch.setChecked(bool(settings.get("isolate_versions")))
@@ -234,8 +241,10 @@ class SettingsPage(QWidget):
 
     def refresh_theme(self) -> None:
         self.setStyleSheet(f"QWidget#settingsPage {{ background: {palette()['bg']}; }}")
+        self._apply_input_styles()
 
-    def _on_isolate_toggled(self, checked: bool) -> None:
+
+def _on_isolate_toggled(self, checked: bool) -> None:
         try:
             self.service.save_settings({"isolate_versions": checked})
         except Exception as exc:
