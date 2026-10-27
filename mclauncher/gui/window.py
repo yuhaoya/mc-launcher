@@ -63,6 +63,7 @@ class MainWindow(FluentWindow):
         self.home_page.playRequested.connect(self._launch)
 
         self.versions_page.installRequested.connect(self._start_install)
+        self.versions_page.installFabricRequested.connect(lambda vid: self._start_install(vid, "fabric"))
         self.versions_page.launchRequested.connect(self._launch)
         self.versions_page.openFolderRequested.connect(self._open_version_folder)
 
@@ -101,30 +102,38 @@ class MainWindow(FluentWindow):
         self.settings_page.refresh()
 
     # ------------------------------------------------------------------
-    def _start_install(self, version_id: str) -> None:
+    def _start_install(self, version_id: str, loader: str = "vanilla") -> None:
+        print(f"DEBUG: 收到安装请求 version={version_id}, loader={loader}")
         if self._install_task is not None:
-            InfoBar.info(
-                "已有安装任务",
-                "请等待当前安装完成，或先在下载页取消它。",
-                parent=self,
-                position=InfoBarPosition.TOP_RIGHT,
-            )
+            InfoBar.info("已有安装任务", "请等待当前安装完成。", parent=self, position=InfoBarPosition.TOP_RIGHT)
             self.switchTo(self.downloads_page)
             return
+
         task_id = uuid.uuid4().hex[:8]
         cancel_event = threading.Event()
-        card = self.downloads_page.add_task(task_id, version_id)
+
+        # 根据加载器类型生成显示的标题
+        display_name = f"{version_id} ({'Fabric' if loader == 'fabric' else '原版'})"
+        card = self.downloads_page.add_task(task_id, display_name)
         self.switchTo(self.downloads_page)
 
-        worker = Worker(
-            lambda w: self.service.install(
+        # 根据加载器类型选择要执行的方法
+        if loader == "fabric":
+            worker_func = lambda w: self.service.install_fabric(
+                version_id,
+                callback=w.signals.progress.emit,
+                log_callback=w.signals.log.emit  # 如果你刚才的 install_fabric 里加了 log_callback，记得改一下
+            )
+        else:
+            worker_func = lambda w: self.service.install(
                 version_id,
                 with_java=True,
                 callback=w.signals.progress.emit,
                 log_callback=w.signals.log.emit,
                 cancel_event=cancel_event,
             )
-        )
+
+        worker = Worker(worker_func)
         self._install_task = {
             "id": task_id,
             "version": version_id,
@@ -133,11 +142,14 @@ class MainWindow(FluentWindow):
             "card": card,
         }
         self._workers.add(worker)
+
+        # 信号连接
         worker.signals.progress.connect(lambda event: self.downloads_page.update_progress(task_id, event))
         worker.signals.log.connect(self.downloads_page.append_log)
         worker.signals.result.connect(lambda data: self._install_finished(task_id, data))
         worker.signals.error.connect(lambda message: self._install_failed(task_id, message))
         worker.signals.finished.connect(lambda: self._install_worker_finished(worker))
+
         QThreadPool.globalInstance().start(worker)
 
     def _install_finished(self, task_id: str, data: dict) -> None:

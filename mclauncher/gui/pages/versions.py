@@ -27,6 +27,7 @@ from qfluentwidgets import (
     StrongBodyLabel,
     TitleLabel,
     TransparentToolButton,
+    ComboBox,
 )
 
 from ...services import LauncherService
@@ -38,6 +39,7 @@ from ..workers import Worker
 
 class VersionsPage(QWidget):
     installRequested = Signal(str)
+    installFabricRequested = Signal(str)
     launchRequested = Signal(str)
     openFolderRequested = Signal(str)
 
@@ -192,6 +194,14 @@ class VersionsPage(QWidget):
         self.detail_grid.setVerticalSpacing(9)
         detail_layout.addLayout(self.detail_grid)
         detail_layout.addStretch(1)
+
+        self.loader_combo = ComboBox(self.detail)
+        self.loader_combo.addItem("原版 (Vanilla)", userData="vanilla")
+        self.loader_combo.addItem("Fabric", userData="fabric")
+        self.loader_combo.setFixedHeight(32)
+        self.loader_combo.setCurrentIndex(0)
+        detail_layout.addWidget(self.loader_combo)
+
         self.primary_button = PrimaryPushButton(self.detail)
         self.primary_button.setText("安装此版本")
         self.primary_button.setIcon(FluentIcon.DOWNLOAD)
@@ -330,9 +340,11 @@ class VersionsPage(QWidget):
         if installed:
             self.primary_button.setText("启动游戏")
             self.primary_button.setIcon(FluentIcon.PLAY)
+            self.loader_combo.hide()  # 👈 已安装版本不需要选加载器，隐藏
         else:
             self.primary_button.setText("安装此版本")
             self.primary_button.setIcon(FluentIcon.DOWNLOAD)
+            self.loader_combo.show()  # 👈 未安装版本，显示加载器选择
         self.folder_button.setEnabled(installed)
 
     def _primary_action(self) -> None:
@@ -343,7 +355,14 @@ class VersionsPage(QWidget):
         if data.get("installed"):
             self.launchRequested.emit(version_id)
         else:
-            self.installRequested.emit(version_id)
+            # 👇 判断下拉框选的是什么
+            loader = self.loader_combo.currentData()
+            print(f"👉 前端点击安装：version={version_id}, 选择的 loader={loader}")
+            if loader == "fabric":
+                self.installFabricRequested.emit(version_id)
+            else:
+                self.installRequested.emit(version_id)
+
 
     def _selected_data(self) -> dict:
         index = self.table.currentIndex()
@@ -357,7 +376,12 @@ class VersionsPage(QWidget):
         if data.get("installed"):
             self.launchRequested.emit(str(version_id))
         else:
-            self.installRequested.emit(str(version_id))
+            # 👇 双击未安装的版本时，直接走默认的安装逻辑（根据下拉框）
+            loader = self.loader_combo.currentData()
+            if loader == "fabric":
+                self.installFabricRequested.emit(str(version_id))
+            else:
+                self.installRequested.emit(str(version_id))
 
     def _open_folder(self) -> None:
         version_id = self.current_version_id()

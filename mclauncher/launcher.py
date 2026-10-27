@@ -98,10 +98,6 @@ def build_command(
     options: LaunchOptions,
     java: Path,
 ) -> tuple[list[str], dict[str, str]]:
-    if meta.get("inheritsFrom"):
-        raise LauncherError(
-            "该版本使用了 inheritsFrom（通常是 Forge/Fabric 等模组版本），当前启动器只支持原版。"
-        )
     version_id = meta["id"]
     account = options.account
     if meta.get("id") != options.version_id:
@@ -109,7 +105,8 @@ def build_command(
 
     natives_dir = paths.natives_dir(version_id)
     natives_dir.mkdir(parents=True, exist_ok=True)
-    client = paths.client_jar(version_id)
+    jar_id = meta.get("jar") or meta["id"]
+    client = paths.client_jar(jar_id)
     if not client.is_file():
         raise LauncherError(f"客户端 jar 不存在: {client}")
 

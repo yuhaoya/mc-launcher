@@ -61,9 +61,9 @@ class SettingsPage(QWidget):
 
         appearance = SettingCardGroup("外观", container)
         self.theme_combo = ComboBox(container)
-        self.theme_combo.addItem("跟随系统", "auto")
-        self.theme_combo.addItem("浅色", "light")
-        self.theme_combo.addItem("深色", "dark")
+        self.theme_combo.addItem("跟随系统", userData="auto")
+        self.theme_combo.addItem("浅色", userData="light")
+        self.theme_combo.addItem("深色", userData="dark")
         self.theme_combo.setFixedWidth(160)
         appearance.addSettingCard(
             SettingRow(FluentIcon.BRIGHTNESS, "主题", "跟随系统会自动使用 Windows 的浅色/深色模式。", self.theme_combo)
@@ -71,7 +71,7 @@ class SettingsPage(QWidget):
 
         self.accent_combo = ComboBox(container)
         for key, label in (("blue", "Fluent 蓝"), ("green", "森林绿"), ("purple", "典雅紫"), ("orange", "活力橙")):
-            self.accent_combo.addItem(label, key)
+            self.accent_combo.addItem(label, userData=key)
         self.accent_combo.setFixedWidth(160)
         appearance.addSettingCard(
             SettingRow(FluentIcon.PALETTE, "强调色", "按钮、选中态与进度条使用的品牌色。", self.accent_combo)
@@ -93,7 +93,7 @@ class SettingsPage(QWidget):
 
 
         self.java_combo = ComboBox(container)
-        self.java_combo.addItem("自动选择（推荐）", "")
+        self.java_combo.addItem("自动选择（推荐）", userData="")
         self.java_combo.setMinimumWidth(300)
         performance.addSettingCard(
             SettingRow(FluentIcon.CODE, "Java 运行时", "优先使用 Mojang 下载的运行时；也可以指定本机 Java。", self.java_combo)
@@ -200,9 +200,9 @@ class SettingsPage(QWidget):
         configured = str(settings.get("java_path") or "")
         self.java_combo.blockSignals(True)
         self.java_combo.clear()
-        self.java_combo.addItem("自动选择（推荐）", "")
+        self.java_combo.addItem("自动选择（推荐）", userData="")
         if configured:
-            self.java_combo.addItem(f"已配置：{configured}", configured)
+            self.java_combo.addItem(f"已配置：{configured}", userData=configured)
         self.java_combo.setCurrentIndex(0)
         self.java_combo.blockSignals(False)
         if not self._javas_loaded and self._java_worker is None:
@@ -222,11 +222,11 @@ class SettingsPage(QWidget):
         current = self.java_combo.currentData() or configured
         self.java_combo.blockSignals(True)
         self.java_combo.clear()
-        self.java_combo.addItem("自动选择（推荐）", "")
+        self.java_combo.addItem("自动选择（推荐）", userData="")
         for row in rows:
-            self.java_combo.addItem(f"{row['version']} — {row['path']}", row["path"])
+            self.java_combo.addItem(f"{row['version']} — {row['path']}", userData=row["path"])
         if configured and self.java_combo.findData(configured) < 0:
-            self.java_combo.addItem(f"已配置：{configured}", configured)
+            self.java_combo.addItem(f"已配置：{configured}", userData=configured)
         index = self.java_combo.findData(current)
         self.java_combo.setCurrentIndex(index if index >= 0 else 0)
         self.java_combo.blockSignals(False)

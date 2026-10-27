@@ -234,13 +234,16 @@ class DownloadsPage(QWidget):
         card = self._cards.get(task_id)
         if not card:
             return
-        cancelled = "取消" in message
-        if ok:
-            card.set_done("安装完成")
-            self.append_log(f"[+] Minecraft {card.version_id} 安装完成")
-        elif cancelled:
+
+        # 👇 如果卡片状态已经是已取消，或者包含取消字样，强制处理为取消
+        cancelled = "取消" in message or card.state == "cancelled"
+
+        if cancelled:
             card.set_cancelled()
             self.append_log(f"[!] 已取消：Minecraft {card.version_id}")
+        elif ok:
+            card.set_done("安装完成")
+            self.append_log(f"[+] Minecraft {card.version_id} 安装完成")
         else:
             card.set_error(message)
             self.append_log(f"[!] 安装失败：{message}")
