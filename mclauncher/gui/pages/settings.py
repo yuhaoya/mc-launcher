@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QThreadPool, Qt, Signal
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtGui import QFont
 from qfluentwidgets import (
     CaptionLabel,
     ComboBox,
@@ -43,12 +44,17 @@ class SettingsPage(QWidget):
         outer.setContentsMargins(30, 24, 30, 24)
         outer.setSpacing(10)
         title = TitleLabel("设置", self)
-        title.setStyleSheet("font-size: 26px; font-weight: 600;")
-        outer.addWidget(title)
-        subtitle = QLabel("外观、内存、Java 与游戏目录。修改后点击底部保存。", self)
-        subtitle.setStyleSheet(f"color: {palette()['secondary']}; font-size: 10pt;")
-        outer.addWidget(subtitle)
+        # 👇 替换 setStyleSheet
+        font = title.font()
+        font.setPixelSize(26)
+        font.setWeight(QFont.DemiBold)
+        title.setFont(font)
 
+        outer.addWidget(title)
+
+        # 👇 QLabel 换成 CaptionLabel
+        subtitle = CaptionLabel("外观、内存、Java 与游戏目录。修改后点击底部保存。", self)
+        outer.addWidget(subtitle)
         scroll = SmoothScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")

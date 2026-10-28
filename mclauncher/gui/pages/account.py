@@ -184,10 +184,16 @@ class AccountPage(QWidget):
         outer.setContentsMargins(30, 24, 30, 24)
         outer.setSpacing(16)
         title = TitleLabel("账号", self)
-        title.setStyleSheet("font-size: 26px; font-weight: 600;")
+        # 👇 替换 setStyleSheet
+        font = title.font()
+        font.setPixelSize(26)
+        font.setWeight(QFont.DemiBold)
+        title.setFont(font)
+
         outer.addWidget(title)
-        subtitle = QLabel("使用微软正版账号联机，或者用离线账号快速开始。", self)
-        subtitle.setStyleSheet(f"color: {palette()['secondary']}; font-size: 10pt;")
+
+        # 👇 QLabel 换成 CaptionLabel
+        subtitle = CaptionLabel("使用微软正版账号联机，或者用离线账号快速开始。", self)
         outer.addWidget(subtitle)
 
         profile = SimpleCardWidget(self)

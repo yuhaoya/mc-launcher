@@ -28,6 +28,7 @@ from qfluentwidgets import (
     TitleLabel,
     TransparentToolButton,
     ComboBox,
+    TableView,
 )
 
 from ...services import LauncherService
@@ -43,41 +44,7 @@ class VersionsPage(QWidget):
     launchRequested = Signal(str)
     openFolderRequested = Signal(str)
 
-    def _table_style(self) -> str:
-        p = palette()
-        return f"""
-            QTableView {{
-                background: transparent;
-                border: none;
-                outline: 0;
-                color: {p['text']};
-                selection-background-color: transparent;
-            }}
-            QTableView::item {{
-                padding: 0 8px;
-                border-bottom: 1px solid {rgba(p['border'], 0.55)};
-            }}
-            QTableView::item:hover {{
-                background: {p['hover']};
-            }}
-            QTableView::item:selected {{
-                background: {p['selected']};
-                color: {p['text']};
-            }}
-            QHeaderView::section {{
-                background: transparent;
-                color: {p['tertiary']};
-                border: none;
-                border-bottom: 1px solid {p['border']};
-                padding: 8px 8px;
-                font-size: 8pt;
-                font-weight: 600;
-            }}
-            QTableCornerButton::section {{
-                background: transparent;
-                border: none;
-            }}
-        """
+    
 
     def __init__(self, service: LauncherService, parent=None):
         super().__init__(parent)
@@ -101,10 +68,17 @@ class VersionsPage(QWidget):
         titles = QVBoxLayout()
         titles.setSpacing(2)
         title = TitleLabel("版本", self)
-        title.setStyleSheet("font-size: 26px; font-weight: 600;")
+        # 👇 替换 setStyleSheet
+        font = title.font()
+        font.setPixelSize(26)
+        font.setWeight(QFont.DemiBold)
+        title.setFont(font)
+
         titles.addWidget(title)
-        subtitle = QLabel("浏览 Mojang 版本清单，安装后即可启动。", self)
-        subtitle.setStyleSheet(f"color: {palette()['secondary']}; font-size: 10pt;")
+
+        # 👇 QLabel 换成 CaptionLabel
+        subtitle = CaptionLabel("浏览 Mojang 版本清单，安装后即可启动。", self)
+        # (不需要设置颜色，它会自动适应深浅色)
         titles.addWidget(subtitle)
         header.addLayout(titles)
         header.addStretch(1)
@@ -140,30 +114,38 @@ class VersionsPage(QWidget):
 
         table_card = SimpleCardWidget(self)
         table_layout = QVBoxLayout(table_card)
-        table_layout.setContentsMargins(6, 6, 6, 6)
+        table_layout.setContentsMargins(12, 12, 12, 12)
         table_layout.setSpacing(0)
         self.model = VersionTableModel(self)
         self.proxy = VersionFilterProxy(self)
         self.proxy.setSourceModel(self.model)
-        self.table = QTableView(table_card)
+        self.table = TableView(table_card)
         self.table.setModel(self.proxy)
         self.table.setItemDelegate(VersionDelegate(self.table))
+
+        # 👇 核心视觉调整
         self.table.setShowGrid(False)
         self.table.setFrameShape(QFrame.NoFrame)
-        self.table.setStyleSheet(self._table_style())
+
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setMouseTracking(True)
+
+        # 隐藏原生表头边框，设置最小行高
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(48)
+        self.table.verticalHeader().setDefaultSectionSize(56)  # 稍微加高一点，给圆角留空间
         self.table.horizontalHeader().setHighlightSections(False)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        for column, width in ((1, 118), (2, 140), (3, 94)):
+        for column, width in ((1, 100), (2, 120), (3, 90)):
             self.table.horizontalHeader().setSectionResizeMode(column, QHeaderView.Fixed)
             self.table.setColumnWidth(column, width)
+
         self.table.doubleClicked.connect(self._activate_index)
         self.table.selectionModel().currentRowChanged.connect(self._selection_changed)
+
+        # 设置表格边距，让它不要紧贴 SimpleCardWidget 的边缘
+        table_layout.setContentsMargins(10, 4, 10, 10)
         table_layout.addWidget(self.table)
         content.addWidget(table_card, 7)
 
@@ -177,7 +159,11 @@ class VersionsPage(QWidget):
         self.detail_eyebrow.setTextColor(palette()["secondary"], palette()["secondary"])
         detail_layout.addWidget(self.detail_eyebrow)
         self.detail_title = TitleLabel("选择一个版本", self.detail)
-        self.detail_title.setStyleSheet("font-size: 22px; font-weight: 600;")
+        # 👇 替换 setStyleSheet
+        font = self.detail_title.font()
+        font.setPixelSize(22)
+        font.setWeight(QFont.DemiBold)
+        self.detail_title.setFont(font)
         detail_layout.addWidget(self.detail_title)
         self.detail_badge = QLabel("", self.detail)
         self.detail_badge.setFixedHeight(24)

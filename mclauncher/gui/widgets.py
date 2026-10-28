@@ -16,6 +16,8 @@ from qfluentwidgets import (
     CaptionLabel,
     FluentIcon,
     IconWidget,
+    PrimaryPushButton,
+    PushButton,
     SettingCard,
     SimpleCardWidget,
     StrongBodyLabel,
@@ -209,13 +211,20 @@ class StatCard(SimpleCardWidget):
         icon_widget = IconWidget(icon, self)
         icon_widget.setFixedSize(18, 18)
         top.addWidget(icon_widget)
+
         title_label = CaptionLabel(title, self)
         title_label.setTextColor(palette()["secondary"], palette()["secondary"])
         top.addWidget(title_label)
         top.addStretch(1)
         layout.addLayout(top)
+
         self.value_label = TitleLabel(value, self)
-        self.value_label.setStyleSheet("font-size: 22px; font-weight: 600;")
+        # 👇 关键修复：用 QFont 代替 setStyleSheet
+        font = self.value_label.font()
+        font.setPixelSize(22)
+        font.setWeight(QFont.DemiBold)
+        self.value_label.setFont(font)
+
         layout.addWidget(self.value_label)
         self.caption_label = CaptionLabel(caption, self)
         self.caption_label.setTextColor(palette()["tertiary"], palette()["tertiary"])
@@ -235,8 +244,13 @@ class SectionHeader(QWidget):
         layout.setSpacing(12)
         text_box = QVBoxLayout()
         text_box.setSpacing(2)
+
         self.title_label = StrongBodyLabel(title, self)
-        self.title_label.setStyleSheet("font-size: 16px;")
+        # 👇 关键修复
+        font = self.title_label.font()
+        font.setPixelSize(16)
+        self.title_label.setFont(font)
+
         text_box.addWidget(self.title_label)
         if subtitle:
             self.subtitle_label = CaptionLabel(subtitle, self)
@@ -301,10 +315,11 @@ class AccountRow(QFrame):
         name = StrongBodyLabel(self.account_name, self)
         text_box.addWidget(name)
         caption = CaptionLabel(f"{data.get('kind', '离线账号')} · {data.get('uuid', '')}", self)
-        caption.textColor = palette()["tertiary"], palette()["tertiary"]
+        caption.setTextColor(palette()["tertiary"], palette()["tertiary"])
         text_box.addWidget(caption)
         layout.addLayout(text_box)
         layout.addStretch(1)
+
         if data.get("active"):
             badge = QLabel("当前", self)
             badge.setStyleSheet(
@@ -313,26 +328,21 @@ class AccountRow(QFrame):
             )
             layout.addWidget(badge)
         else:
-            switch_button = QPushButton("切换到此账号", self)
+            # 👇 替换为 PrimaryPushButton，自动跟随主题色
+            switch_button = PrimaryPushButton("切换到此账号", self)
             switch_button.setFixedHeight(30)
             switch_button.setCursor(Qt.PointingHandCursor)
-            switch_button.setStyleSheet(
-                f"""
-                QPushButton {{ background: {palette()['accent']}; color: white; border: none;
-                              border-radius: 5px; padding: 0 16px; font-weight: 600; }}
-                QPushButton:hover {{ background: #1A7FD1; }}
-                """
-            )
             switch_button.clicked.connect(lambda: self.switchRequested.emit(self.account_name))
             layout.addWidget(switch_button)
-        remove_button = QPushButton("删除", self)
+
+        # 👇 替换为 Fluent 的 PushButton，并去除边框，改为纯文本红色
+        remove_button = PushButton("删除", self)
         remove_button.setFixedHeight(30)
         remove_button.setCursor(Qt.PointingHandCursor)
         remove_button.setStyleSheet(
             """
-            QPushButton { background: transparent; color: #C42B1C; border: 1px solid #C42B1C;
-                          border-radius: 5px; padding: 0 12px; }
-            QPushButton:hover { background: #C42B1C22; }
+            PushButton { color: #C42B1C; }
+            PushButton:hover { background: rgba(196, 43, 28, 0.1); }
             """
         )
         remove_button.clicked.connect(lambda: self.removeRequested.emit(self.account_name))
@@ -367,15 +377,10 @@ class VersionRow(QFrame):
         text_box.addWidget(caption)
         layout.addLayout(text_box)
         layout.addStretch(1)
-        play_button = QPushButton("启动", self)
-        play_button.setFixedHeight(30)
+        # 👇 换成 PrimaryPushButton
+        play_button = PrimaryPushButton("启动", self)
+        play_button.setFixedHeight(32)
+        play_button.setMinimumWidth(72)
         play_button.setCursor(Qt.PointingHandCursor)
-        play_button.setStyleSheet(
-            f"""
-            QPushButton {{ background: {palette()["accent"]}; color: white; border: none;
-                          border-radius: 5px; padding: 0 16px; font-weight: 600; }}
-            QPushButton:hover {{ background: #1A7FD1; }}
-            """
-        )
-        play_button.clicked.connect(lambda: self.playRequested.emit(self.version_id))   # ← 改为 playRequested
+        play_button.clicked.connect(lambda: self.playRequested.emit(self.version_id))
         layout.addWidget(play_button)

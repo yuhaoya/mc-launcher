@@ -146,10 +146,15 @@ class DownloadsPage(QWidget):
         titles = QVBoxLayout()
         titles.setSpacing(2)
         title = TitleLabel("下载", self)
-        title.setStyleSheet("font-size: 26px; font-weight: 600;")
+        # 👇 替换 setStyleSheet
+        font = title.font()
+        font.setPixelSize(26)
+        font.setWeight(QFont.DemiBold)
+        title.setFont(font)
         titles.addWidget(title)
-        subtitle = QLabel("安装进度、阶段与日志都会显示在这里。", self)
-        subtitle.setStyleSheet(f"color: {palette()['secondary']}; font-size: 10pt;")
+
+        # 👇 QLabel 换成 CaptionLabel
+        subtitle = CaptionLabel("安装进度、阶段与日志都会显示在这里。", self)
         titles.addWidget(subtitle)
         header.addLayout(titles)
         header.addStretch(1)
