@@ -107,24 +107,42 @@ class VersionFilterProxy(QSortFilterProxyModel):
 class VersionDelegate(QStyledItemDelegate):
     ROW_HEIGHT = 48
 
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.hoverRow = -1
+        self.selectedRows = set()
+        self.pressedRow = -1  # 👈 新增：记录按下的行
+
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex):
         size = super().sizeHint(option, index)
         size.setHeight(self.ROW_HEIGHT)
         return size
 
+    # 👇 qfluentwidgets 要求实现的三个状态回调
+    def setHoverRow(self, row: int):
+        self.hoverRow = row
+
+    def setSelectedRows(self, indexes):
+        self.selectedRows = {idx.row() for idx in indexes}
+
+    def setPressedRow(self, row: int):
+        self.pressedRow = row
+
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
-        row = index.data(Qt.UserRole) or {}
+        row_data = index.data(Qt.UserRole) or {}
         column = index.column()
+        row_index = index.row()
         colors = palette()
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, True)
 
         rect = option.rect
-        # 上下留出 2px 的间隙，让行与行之间更有呼吸感
-        draw_rect = rect.adjusted(0, 2, 0, -2)
+        draw_rect = rect.adjusted(0, 3, 0, -3)
 
-        selected = bool(option.state & QStyle.State_Selected)
-        hovered = bool(option.state & QStyle.State_MouseOver)
+        # 👇 通过我们维护的集合和状态来判断
+        selected = row_index in self.selectedRows
+        pressed = row_index == self.pressedRow
+        hovered = (self.hoverRow == row_index) or pressed
 
         bg = None
         if selected:
@@ -134,10 +152,8 @@ class VersionDelegate(QStyledItemDelegate):
 
         if bg:
             path = QPainterPath()
-            r = 6  # 圆角半径
-            # 👇 核心：精细拼接四列的圆角，形成完整的胶囊形
+            r = 6
             if column == 0:
-                # 第一列：左上、左下圆角
                 path.moveTo(draw_rect.right(), draw_rect.top())
                 path.lineTo(draw_rect.left() + r, draw_rect.top())
                 path.arcTo(draw_rect.left(), draw_rect.top(), 2 * r, 2 * r, 90, 90)
@@ -145,7 +161,6 @@ class VersionDelegate(QStyledItemDelegate):
                 path.arcTo(draw_rect.left(), draw_rect.bottom() - 2 * r, 2 * r, 2 * r, 180, 90)
                 path.lineTo(draw_rect.right(), draw_rect.bottom())
             elif column == 3:
-                # 最后一列：右上、右下圆角
                 path.moveTo(draw_rect.left(), draw_rect.top())
                 path.lineTo(draw_rect.right() - r, draw_rect.top())
                 path.arcTo(draw_rect.right() - 2 * r, draw_rect.top(), 2 * r, 2 * r, 90, -90)
@@ -153,12 +168,10 @@ class VersionDelegate(QStyledItemDelegate):
                 path.arcTo(draw_rect.right() - 2 * r, draw_rect.bottom() - 2 * r, 2 * r, 2 * r, 0, -90)
                 path.lineTo(draw_rect.left(), draw_rect.bottom())
             else:
-                # 中间列：矩形
                 path.addRect(draw_rect)
             path.closeSubpath()
             painter.fillPath(path, QColor(bg))
 
-        # 内容区左侧统一留出 16px 的内边距
         inner = rect.adjusted(16, 0, -12, 0)
 
         if column == 0:
@@ -167,11 +180,11 @@ class VersionDelegate(QStyledItemDelegate):
             font.setWeight(QFont.DemiBold)
             painter.setFont(font)
             painter.setPen(QColor(colors["text"]))
-            text = QFontMetrics(font).elidedText(row.get("id", ""), Qt.ElideRight, inner.width() - 16)
+            text = QFontMetrics(font).elidedText(row_data.get("id", ""), Qt.ElideRight, inner.width() - 16)
             painter.drawText(inner, Qt.AlignVCenter | Qt.AlignLeft, text)
 
         elif column == 1:
-            kind = row.get("type", "release")
+            kind = row_data.get("type", "release")
             label = TYPE_LABELS.get(kind, kind)
             color = QColor(TYPE_COLORS.get(kind, "#7A7574"))
             font = QFont(option.font)
@@ -195,22 +208,28 @@ class VersionDelegate(QStyledItemDelegate):
             font.setPointSize(9)
             painter.setFont(font)
             painter.setPen(QColor(colors["secondary"]))
-            painter.drawText(inner, Qt.AlignVCenter | Qt.AlignLeft, str(row.get("release_time", ""))[:10])
+            painter.drawText(inner, Qt.AlignVCenter | Qt.AlignLeft, str(row_data.get("release_time", ""))[:10])
 
         else:
-            installed = bool(row.get("installed"))
+            installed = bool(row_data.get("installed"))
             color = QColor(colors["success"] if installed else colors["tertiary"])
-            dot = rect.adjusted(16, rect.height() // 2 - 3, 0, 0)
-            dot.setWidth(6)
-            dot.setHeight(6)
-            painter.setBrush(color)
+
+            dot_x = rect.left() + 16
+            dot_y = rect.center().y() - 3
+            glow = QColor(color)
+            glow.setAlpha(50)
+            painter.setBrush(glow)
             painter.setPen(Qt.NoPen)
-            painter.drawEllipse(dot)
+            painter.drawEllipse(QRectF(dot_x - 2, dot_y - 2, 10, 10))
+            painter.setBrush(color)
+            painter.drawEllipse(QRectF(dot_x, dot_y, 6, 6))
+
             font = QFont(option.font)
             font.setPointSize(9)
             painter.setFont(font)
+
+            text_rect = rect.adjusted(30, 0, 0, 0)
             painter.setPen(QColor(colors["secondary"] if installed else colors["tertiary"]))
-            painter.drawText(inner.adjusted(14, 0, 0, 0), Qt.AlignVCenter | Qt.AlignLeft,
-                             "已安装" if installed else "未安装")
+            painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, "已安装" if installed else "未安装")
 
         painter.restore()

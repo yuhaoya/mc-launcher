@@ -64,6 +64,7 @@ class MainWindow(FluentWindow):
 
         self.versions_page.installRequested.connect(self._start_install)
         self.versions_page.installFabricRequested.connect(lambda vid: self._start_install(vid, "fabric"))
+        self.versions_page.installForgeRequested.connect(lambda vid: self._start_install(vid, "forge"))
         self.versions_page.launchRequested.connect(self._launch)
         self.versions_page.openFolderRequested.connect(self._open_version_folder)
 
@@ -113,7 +114,12 @@ class MainWindow(FluentWindow):
         cancel_event = threading.Event()
 
         # 根据加载器类型生成显示的标题
-        display_name = f"{version_id} ({'Fabric' if loader == 'fabric' else '原版'})"
+        loader_name = "原版"
+        if loader == "fabric":
+            loader_name = "Fabric"
+        elif loader == "forge":
+            loader_name = "Forge"
+        display_name = f"{version_id} ({loader_name})"
         card = self.downloads_page.add_task(task_id, display_name)
         self.switchTo(self.downloads_page)
 
@@ -123,6 +129,13 @@ class MainWindow(FluentWindow):
                 version_id,
                 callback=w.signals.progress.emit,
                 log_callback=w.signals.log.emit  # 如果你刚才的 install_fabric 里加了 log_callback，记得改一下
+            )
+        elif loader == "forge":
+            worker_func = lambda w: self.service.install_forge(
+                version_id,
+                callback=w.signals.progress.emit,
+                log_callback=w.signals.log.emit,
+                cancel_event=cancel_event,
             )
         else:
             worker_func = lambda w: self.service.install(

@@ -41,6 +41,7 @@ from ..workers import Worker
 class VersionsPage(QWidget):
     installRequested = Signal(str)
     installFabricRequested = Signal(str)
+    installForgeRequested = Signal(str)
     launchRequested = Signal(str)
     openFolderRequested = Signal(str)
 
@@ -184,6 +185,7 @@ class VersionsPage(QWidget):
         self.loader_combo = ComboBox(self.detail)
         self.loader_combo.addItem("原版 (Vanilla)", userData="vanilla")
         self.loader_combo.addItem("Fabric", userData="fabric")
+        self.loader_combo.addItem("Forge", userData="forge")
         self.loader_combo.setFixedHeight(32)
         self.loader_combo.setCurrentIndex(0)
         detail_layout.addWidget(self.loader_combo)
@@ -343,9 +345,10 @@ class VersionsPage(QWidget):
         else:
             # 👇 判断下拉框选的是什么
             loader = self.loader_combo.currentData()
-            print(f"👉 前端点击安装：version={version_id}, 选择的 loader={loader}")
             if loader == "fabric":
                 self.installFabricRequested.emit(version_id)
+            elif loader == "forge":
+                self.installForgeRequested.emit(version_id)
             else:
                 self.installRequested.emit(version_id)
 
@@ -366,6 +369,8 @@ class VersionsPage(QWidget):
             loader = self.loader_combo.currentData()
             if loader == "fabric":
                 self.installFabricRequested.emit(str(version_id))
+            elif loader == "forge":
+                self.installForgeRequested.emit(version_id)
             else:
                 self.installRequested.emit(str(version_id))
 

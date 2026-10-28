@@ -7,6 +7,9 @@ from pathlib import Path
 from typing import Any, Callable
 import copy,json
 import urllib.request
+import shutil
+import subprocess
+import os
 
 from .auth import (
     Account,
@@ -556,6 +559,14 @@ class LauncherService:
                 old_args = merged.get("minecraftArguments", "")
                 new_args = value or ""
                 merged["minecraftArguments"] = f"{old_args} {new_args}".strip()
+            elif key == "assetIndex":
+                # 👇 核心修复：原版的资源索引（如 "5"）永远优先于子版本的 legacy
+                if "assetIndex" not in merged or merged["assetIndex"].get("id") == "legacy":
+                    merged["assetIndex"] = value
+            elif key == "assets":
+                # 👇 核心修复：防止 assets 被覆盖
+                if "assets" not in merged or merged["assets"] == "legacy":
+                    merged["assets"] = value
             else:
                 # 其他字段（mainClass, id 等）直接覆盖
                 merged[key] = value
@@ -704,3 +715,160 @@ class LauncherService:
         check_cancel()
         log(f"{fabric_id} 独立化安装完成！")
         return {"id": fabric_id, "type": "release"}  # 标记为 release 即可，走普通启动逻辑
+
+    def install_forge(
+            self,
+            mc_version: str,
+            callback: ProgressCallback | None = None,
+            log_callback: LogCallback | None = None,
+            cancel_event: threading.Event | None = None
+    ) -> dict[str, Any]:
+
+        def check_cancel():
+            if cancel_event and cancel_event.is_set():
+                raise LauncherError("安装已取消")
+
+        def log(msg):
+            if log_callback:
+                log_callback(f"[*] {msg}")
+
+        check_cancel()
+
+        # 1. 确保原版已安装
+        if not is_installed(self.paths, mc_version):
+            log(f"检测到原版 {mc_version} 未安装，准备先安装原版...")
+            try:
+                self.install(
+                    mc_version,
+                    with_java=True,
+                    callback=callback,
+                    log_callback=log_callback,
+                    cancel_event=cancel_event
+                )
+            except Exception as e:
+                check_cancel()
+                raise LauncherError(f"前置原版安装失败: {e}")
+        else:
+            log(f"原版 {mc_version} 已存在，跳过原版安装。")
+
+        check_cancel()
+        log(f"正在获取 Forge {mc_version} 的推荐版本信息...")
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+
+        # 2. 获取推荐的 Forge 版本
+        try:
+            promo_url = "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json"
+            req = urllib.request.Request(promo_url, headers=headers)
+            with urllib.request.urlopen(req) as response:
+                promos = json.loads(response.read().decode())
+
+            forge_version = promos.get("promos", {}).get(f"{mc_version}-recommended",
+                                                         promos.get("promos", {}).get(f"{mc_version}-latest"))
+            if not forge_version:
+                raise LauncherError(f"未找到适用于 {mc_version} 的 Forge 版本")
+        except Exception as e:
+            raise LauncherError(f"获取 Forge 版本失败: {e}")
+
+        log(f"找到推荐版本: {forge_version}")
+
+        # 3. 下载 installer.jar
+        installer_url = f"https://maven.minecraftforge.net/net/minecraftforge/forge/{mc_version}-{forge_version}/forge-{mc_version}-{forge_version}-installer.jar"
+        installer_jar = self.paths.cache_dir / f"forge-{mc_version}-{forge_version}-installer.jar"
+        installer_jar.parent.mkdir(parents=True, exist_ok=True)
+
+        if not installer_jar.is_file():
+            log("正在下载 Forge Installer...")
+            try:
+                req = urllib.request.Request(installer_url, headers=headers)
+                with urllib.request.urlopen(req) as response:
+                    with open(installer_jar, 'wb') as f:
+                        f.write(response.read())
+            except Exception as e:
+                raise LauncherError(f"下载 Forge Installer 失败: {e}")
+
+        check_cancel()
+
+        # 4. 获取 Java 并执行静默安装
+        log("正在准备 Java 环境...")
+        vanilla_meta = self.repo.meta(mc_version)
+        java = ensure_java(
+            vanilla_meta, self.paths, allow_install=True,
+            stream=io.StringIO(), callback=callback, cancel_event=cancel_event
+        )
+
+        log("正在执行 Forge 安装器（可能需要几分钟，请耐心等待）...")
+
+        # 确保 game_dir 下有 launcher_profiles.json
+        profiles_file = self.paths.game_dir / "launcher_profiles.json"
+        if not profiles_file.is_file():
+            profiles_file.write_text("{}", encoding="utf-8")
+
+        cmd = [str(java), "-jar", str(installer_jar), "--installClient"]
+
+        env = os.environ.copy()
+        java_dir = str(Path(java).parent)
+        env["PATH"] = java_dir + os.pathsep + env.get("PATH", "")
+
+        process = subprocess.Popen(
+            cmd,
+            cwd=str(self.paths.game_dir),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding='utf-8',
+            errors='ignore',
+            env=env
+        )
+
+        for line in process.stdout:
+            check_cancel()
+            line = line.strip()
+            if line:
+                log(line)
+
+        process.wait()
+        if process.returncode != 0:
+            raise LauncherError(f"Forge 安装器执行失败，退出码: {process.returncode}")
+
+        check_cancel()
+
+        # 5. 独立化处理（最简单粗暴的方式）
+        log("正在创建独立化 Forge 版本...")
+
+        forge_raw_id = f"{mc_version}-forge-{forge_version}"
+        forge_json_path = self.paths.version_json(forge_raw_id)
+
+        if not forge_json_path.is_file():
+            raise LauncherError("Forge 安装器执行完毕，但未找到生成的版本 JSON。")
+
+        # 读取 Forge 安装器生成的 JSON
+        forge_meta = json.loads(forge_json_path.read_text(encoding="utf-8-sig"))
+
+        # 修改它的 ID
+        target_id = f"{mc_version}-Forge"
+        forge_meta["id"] = target_id
+
+        # 放入新的独立文件夹
+        target_dir = self.paths.version_dir(target_id)
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        target_json_path = target_dir / f"{target_id}.json"
+        target_json_path.write_text(json.dumps(forge_meta, indent=2), encoding="utf-8")
+
+        # 复制原版 JAR，让文件夹看起来完整
+        log("正在复制原版客户端 JAR...")
+        src_jar = self.paths.client_jar(mc_version)
+        dst_jar = self.paths.client_jar(target_id)
+        if src_jar.is_file():
+            shutil.copy2(src_jar, dst_jar)
+        else:
+            raise LauncherError("原版客户端 JAR 缺失，无法完成独立复制。")
+
+        # 6. 清理原版生成的 forge 文件夹（可选）
+        shutil.rmtree(self.paths.version_dir(forge_raw_id), ignore_errors=True)
+
+        log(f"{target_id} 独立化安装完成！")
+        return {"id": target_id, "type": "release"}

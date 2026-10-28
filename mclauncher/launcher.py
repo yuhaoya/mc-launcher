@@ -197,14 +197,35 @@ def build_command(
 
     jvm_args.extend(options.jvm_args)
 
+    # 获取当前版本 JSON 中声明的参数（1.13+ 用 arguments.game，旧版用 minecraftArguments）
     game_spec = arguments.get("game")
     if game_spec is not None:
+        # 直接解析 JSON 中的参数，里面已经包含了 --username, --gameDir 等所有基础参数
         game_args = _flatten(game_spec, ctx, values)
     elif meta.get("minecraftArguments"):
         game_args = [_substitute(part, values) for part in str(meta["minecraftArguments"]).split()]
     else:
-        raise LauncherError("版本 JSON 中没有任何游戏启动参数")
+        # 只有极其古老或缺失参数的异常 JSON 才使用兜底参数
+        game_args = [
+            "--username", values["auth_player_name"],
+            "--version", values["version_name"],
+            "--gameDir", values["game_directory"],
+            "--assetsDir", values["assets_root"],
+            "--assetIndex", values["assets_index_name"],
+            "--uuid", values["auth_uuid"],
+            "--accessToken", values["auth_access_token"],
+            "--clientId", values["clientid"],
+            "--xuid", values["auth_xuid"],
+            "--userType", values["user_type"],
+            "--versionType", values["version_type"],
+        ]
+        if custom_resolution:
+            game_args.extend([
+                "--width", values["resolution_width"],
+                "--height", values["resolution_height"]
+            ])
 
+    # 追加用户自定义的游戏参数（如果有）
     game_args.extend(options.game_args)
 
     main_class = meta.get("mainClass")

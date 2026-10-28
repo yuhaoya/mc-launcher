@@ -202,17 +202,26 @@ class SettingsPage(QWidget):
         self.config_dir_label.setText(str(settings.get("config_dir") or ""))
         self.isolate_switch.setChecked(bool(settings.get("isolate_versions")))
         self.offline_input.setText(str(settings.get("offline_name") or "Player"))
-        self.isolate_switch.setChecked(bool(settings.get("isolate_versions")))
+
         configured = str(settings.get("java_path") or "")
-        self.java_combo.blockSignals(True)
-        self.java_combo.clear()
-        self.java_combo.addItem("自动选择（推荐）", userData="")
-        if configured:
-            self.java_combo.addItem(f"已配置：{configured}", userData=configured)
-        self.java_combo.setCurrentIndex(0)
-        self.java_combo.blockSignals(False)
+
+        # 👇 关键修复：只有在第一次加载时，才重置下拉框
         if not self._javas_loaded and self._java_worker is None:
+            self.java_combo.blockSignals(True)
+            self.java_combo.clear()
+            self.java_combo.addItem("自动选择（推荐）", userData="")
+            if configured:
+                self.java_combo.addItem(f"已配置：{configured}", userData=configured)
+            self.java_combo.setCurrentIndex(0)
+            self.java_combo.blockSignals(False)
             self._load_javas()
+        else:
+            # 如果已经加载过了，只同步当前选中状态，绝对不要清空
+            self.java_combo.blockSignals(True)
+            index = self.java_combo.findData(configured)
+            if index >= 0:
+                self.java_combo.setCurrentIndex(index)
+            self.java_combo.blockSignals(False)
 
     def _load_javas(self) -> None:
         worker = Worker(lambda w: self.service.javas())
