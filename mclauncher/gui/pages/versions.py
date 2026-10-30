@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import urllib.parse
+import urllib.request
+import json
+
 from PySide6.QtCore import QThreadPool, Qt, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
@@ -10,9 +14,9 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QSizePolicy,
-    QTableView,
     QVBoxLayout,
     QWidget,
+    QListWidgetItem
 )
 from qfluentwidgets import (
     CaptionLabel,
@@ -29,6 +33,8 @@ from qfluentwidgets import (
     TransparentToolButton,
     ComboBox,
     TableView,
+    TabWidget,
+    ListWidget,
 )
 
 from ...services import LauncherService
@@ -36,7 +42,6 @@ from ..models import TYPE_LABELS, VersionDelegate, VersionFilterProxy, VersionTa
 from ..theme import palette, rgba
 from ..widgets import SectionHeader, SettingRow
 from ..workers import Worker
-
 
 class VersionsPage(QWidget):
     installRequested = Signal(str)
@@ -65,55 +70,70 @@ class VersionsPage(QWidget):
         outer.setContentsMargins(30, 24, 30, 24)
         outer.setSpacing(16)
 
+        # 顶部标题区
         header = QHBoxLayout()
+        header.setSpacing(10)
         titles = QVBoxLayout()
         titles.setSpacing(2)
-        title = TitleLabel("版本", self)
-        # 👇 替换 setStyleSheet
+
+        title = TitleLabel("下载", self)
         font = title.font()
         font.setPixelSize(26)
         font.setWeight(QFont.DemiBold)
         title.setFont(font)
-
         titles.addWidget(title)
 
-        # 👇 QLabel 换成 CaptionLabel
-        subtitle = CaptionLabel("浏览 Mojang 版本清单，安装后即可启动。", self)
-        # (不需要设置颜色，它会自动适应深浅色)
+        subtitle = CaptionLabel("下载游戏版本，或者搜索安装 Mod。", self)
+        subtitle.setTextColor(QColor("#5C5C5C"), QColor("#C8C8C8"))  # 跟随主题的灰色
         titles.addWidget(subtitle)
+
         header.addLayout(titles)
         header.addStretch(1)
-        self.count_label = CaptionLabel("尚未加载", self)
-        self.count_label.setTextColor(palette()["secondary"], palette()["secondary"])
-        header.addWidget(self.count_label, 0, Qt.AlignBottom)
         outer.addLayout(header)
+
+        # 引入 TabWidget
+        self.tab_widget = TabWidget(self)
+        self.version_tab = QWidget()
+        self.mod_tab = QWidget()
+
+        # ============ Tab 1: 原有的版本列表 ============
+        version_layout = QVBoxLayout(self.version_tab)
+        version_layout.setContentsMargins(0, 10, 0, 0)
 
         toolbar = QHBoxLayout()
         toolbar.setSpacing(10)
-        self.search = SearchLineEdit(self)
+        self.search = SearchLineEdit(self.version_tab)
         self.search.setPlaceholderText("搜索版本，例如 1.21.5")
         self.search.setFixedWidth(300)
         self.search.textChanged.connect(self._apply_filters)
         toolbar.addWidget(self.search)
 
-        self.segmented = SegmentedWidget(self)
+        self.segmented = SegmentedWidget(self.version_tab)
         for key, text in (("all", "全部"), ("release", "正式版"), ("snapshot", "快照"), ("installed", "已安装")):
             self.segmented.addItem(key, text)
         self.segmented.setCurrentItem("all")
         self.segmented.currentItemChanged.connect(lambda _: self._apply_filters())
         toolbar.addWidget(self.segmented)
+
         toolbar.addStretch(1)
-        self.refresh_button = TransparentToolButton(self)
+
+        # 👇 补上遗漏的 count_label
+        self.count_label = CaptionLabel("尚未加载", self.version_tab)
+        self.count_label.setTextColor(palette()["secondary"], palette()["secondary"])
+        toolbar.addWidget(self.count_label)
+
+        self.refresh_button = TransparentToolButton(self.version_tab)
         self.refresh_button.setIcon(FluentIcon.SYNC)
         self.refresh_button.setToolTip("刷新版本清单")
         self.refresh_button.clicked.connect(lambda: self.ensure_loaded(force=True))
         toolbar.addWidget(self.refresh_button)
-        outer.addLayout(toolbar)
+        version_layout.addLayout(toolbar)
 
         content = QHBoxLayout()
         content.setSpacing(16)
 
-        table_card = SimpleCardWidget(self)
+        # 表格卡片
+        table_card = SimpleCardWidget(self.version_tab)
         table_layout = QVBoxLayout(table_card)
         table_layout.setContentsMargins(12, 12, 12, 12)
         table_layout.setSpacing(0)
@@ -124,18 +144,14 @@ class VersionsPage(QWidget):
         self.table.setModel(self.proxy)
         self.table.setItemDelegate(VersionDelegate(self.table))
 
-        # 👇 核心视觉调整
         self.table.setShowGrid(False)
         self.table.setFrameShape(QFrame.NoFrame)
-
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setMouseTracking(True)
-
-        # 隐藏原生表头边框，设置最小行高
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(56)  # 稍微加高一点，给圆角留空间
+        self.table.verticalHeader().setDefaultSectionSize(48)  # 可以在这里统一设置行高
         self.table.horizontalHeader().setHighlightSections(False)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         for column, width in ((1, 100), (2, 120), (3, 90)):
@@ -144,38 +160,41 @@ class VersionsPage(QWidget):
 
         self.table.doubleClicked.connect(self._activate_index)
         self.table.selectionModel().currentRowChanged.connect(self._selection_changed)
-
-        # 设置表格边距，让它不要紧贴 SimpleCardWidget 的边缘
         table_layout.setContentsMargins(10, 4, 10, 10)
         table_layout.addWidget(self.table)
         content.addWidget(table_card, 7)
 
-        self.detail = SimpleCardWidget(self)
+        # 👇 补全遗漏的右侧详情面板
+        self.detail = SimpleCardWidget(self.version_tab)
         self.detail.setMinimumWidth(310)
         self.detail.setMaximumWidth(380)
         detail_layout = QVBoxLayout(self.detail)
         detail_layout.setContentsMargins(22, 20, 22, 20)
         detail_layout.setSpacing(10)
+
         self.detail_eyebrow = CaptionLabel("版本详情", self.detail)
         self.detail_eyebrow.setTextColor(palette()["secondary"], palette()["secondary"])
         detail_layout.addWidget(self.detail_eyebrow)
+
         self.detail_title = TitleLabel("选择一个版本", self.detail)
-        # 👇 替换 setStyleSheet
         font = self.detail_title.font()
         font.setPixelSize(22)
         font.setWeight(QFont.DemiBold)
         self.detail_title.setFont(font)
         detail_layout.addWidget(self.detail_title)
+
         self.detail_badge = QLabel("", self.detail)
         self.detail_badge.setFixedHeight(24)
         self.detail_badge.setAlignment(Qt.AlignCenter)
         self.detail_badge.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         detail_layout.addWidget(self.detail_badge, 0, Qt.AlignLeft)
+
         self.detail_note = CaptionLabel("从左侧列表选择一个版本查看详情。", self.detail)
         self.detail_note.setTextColor(palette()["secondary"], palette()["secondary"])
         self.detail_note.setWordWrap(True)
         detail_layout.addWidget(self.detail_note)
         detail_layout.addSpacing(6)
+
         self.detail_grid = QGridLayout()
         self.detail_grid.setHorizontalSpacing(16)
         self.detail_grid.setVerticalSpacing(9)
@@ -197,15 +216,47 @@ class VersionsPage(QWidget):
         self.primary_button.setEnabled(False)
         self.primary_button.clicked.connect(self._primary_action)
         detail_layout.addWidget(self.primary_button)
+
         self.folder_button = PushButton(self.detail)
         self.folder_button.setText("打开版本目录")
         self.folder_button.setIcon(FluentIcon.FOLDER)
         self.folder_button.setEnabled(False)
         self.folder_button.clicked.connect(self._open_folder)
         detail_layout.addWidget(self.folder_button)
-        content.addWidget(self.detail, 3)
 
-        outer.addLayout(content, 1)
+        content.addWidget(self.detail, 3)
+        version_layout.addLayout(content, 1)
+
+        # ============ Tab 2: Mod 资源搜索 ============
+        mod_layout = QVBoxLayout(self.mod_tab)
+        mod_layout.setContentsMargins(0, 10, 0, 0)
+        mod_toolbar = QHBoxLayout()
+
+        self.mod_source = ComboBox(self.mod_tab)
+        self.mod_source.addItem("Modrinth", userData="modrinth")
+        self.mod_source.addItem("CurseForge", userData="curseforge")
+        mod_toolbar.addWidget(self.mod_source)
+
+        self.mod_search_input = SearchLineEdit(self.mod_tab)
+        self.mod_search_input.setPlaceholderText("输入关键词搜索 Mod...")
+        self.mod_search_input.returnPressed.connect(self._search_mods)
+        mod_toolbar.addWidget(self.mod_search_input, 1)
+
+        self.mod_search_btn = PrimaryPushButton("搜索", self.mod_tab)
+        self.mod_search_btn.clicked.connect(self._search_mods)
+        mod_toolbar.addWidget(self.mod_search_btn)
+        mod_layout.addLayout(mod_toolbar)
+
+        self.mod_status = CaptionLabel("准备就绪", self.mod_tab)
+        mod_layout.addWidget(self.mod_status)
+
+        self.mod_list = ListWidget(self.mod_tab)
+        mod_layout.addWidget(self.mod_list, 1)
+
+        # 组装 Tab
+        self.tab_widget.addTab(self.version_tab, "游戏版本", icon=FluentIcon.LIBRARY)
+        self.tab_widget.addTab(self.mod_tab, "资源搜索", icon=FluentIcon.SEARCH)
+        outer.addWidget(self.tab_widget, 1)
 
     # ------------------------------------------------------------------
     def ensure_loaded(self, force: bool = False) -> None:
@@ -394,3 +445,79 @@ class VersionsPage(QWidget):
             self._apply_filters()
             if current:
                 self.select_version(current)
+
+    def _search_mods(self):
+        query = self.mod_search_input.text().strip()
+        if not query:
+            InfoBar.warning("提示", "请输入搜索关键词", parent=self)
+            return
+
+        source = self.mod_source.currentData()
+        self.mod_list.clear()
+        self.mod_status.setText(f"正在搜索 {source.capitalize()} …")
+
+        def fetch_data(w):
+            try:
+                if source == "modrinth":
+                    # Modrinth 搜索接口
+                    url = f"https://api.modrinth.com/v2/search?query={urllib.parse.quote(query)}&limit=20"
+                    req = urllib.request.Request(url, headers={"User-Agent": "MCL-Studio/1.0"})
+                else:
+                    # CurseForge 搜索接口（需要 API Key）
+                    api_key = self.service.config.get("curseforge_api_key") or ""
+                    if not api_key:
+                        raise ValueError("请在设置中填写 CurseForge API Key")
+
+                    url = (
+                        "https://api.curseforge.com/v1/mods/search"
+                        f"?gameId=432&classId=6&searchFilter={urllib.parse.quote(query)}&pageSize=20"
+                    )
+                    req = urllib.request.Request(
+                        url, headers={"x-api-key": api_key, "Accept": "application/json"}
+                    )
+
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    return json.loads(resp.read().decode())
+            except Exception as e:
+                raise e
+
+        worker = Worker(fetch_data)
+
+        def on_success(data):
+            # 正确解析字段
+            if source == "modrinth":
+                hits = data.get("hits", [])
+            else:
+                hits = data.get("data", [])
+
+            if not hits:
+                self.mod_status.setText("没有找到相关 Mod，换个关键词试试。")
+                return
+
+            self.mod_status.setText(f"搜索完成，找到 {len(hits)} 个结果")
+
+            for item in hits:
+                if source == "modrinth":
+                    title = item.get("title") or item.get("slug") or "未知"
+                    desc = item.get("description") or ""
+                else:
+                    title = item.get("name") or "未知"
+                    desc = item.get("summary") or ""
+
+                # 让标题和描述稍微有点排版
+                text = f"{title}\n{desc[:80]}..." if len(desc) > 80 else f"{title}\n{desc}"
+
+                # 👇 核心修复：使用 QListWidgetItem，并通过 addItem 加入列表
+                list_item = QListWidgetItem(text)
+                list_item.setToolTip(desc)
+                list_item.setData(Qt.UserRole, item)  # 存原始数据
+                self.mod_list.addItem(list_item)
+
+        def on_error(err):
+            # 把错误显示到界面上，方便排查
+            self.mod_status.setText(f"搜索失败：{err}")
+            InfoBar.error("搜索出错", str(err), parent=self)
+
+        worker.signals.result.connect(on_success)
+        worker.signals.error.connect(on_error)
+        QThreadPool.globalInstance().start(worker)

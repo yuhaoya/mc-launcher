@@ -21,6 +21,7 @@ from .pages.downloads import DownloadsPage
 from .pages.home import HomePage
 from .pages.settings import SettingsPage
 from .pages.versions import VersionsPage
+from .pages.instances import InstancesPage
 from .theme import apply_theme
 from .workers import Worker
 
@@ -46,12 +47,14 @@ class MainWindow(FluentWindow):
         self.home_page = HomePage(service, self)
         self.versions_page = VersionsPage(service, self)
         self.downloads_page = DownloadsPage(service, self)
+        self.instances_page = InstancesPage(service, self)
         self.account_page = AccountPage(service, self)
         self.settings_page = SettingsPage(service, self)
 
         self.addSubInterface(self.home_page, FIF.HOME, "主页")
-        self.addSubInterface(self.versions_page, FIF.LIBRARY, "版本")
-        self.addSubInterface(self.downloads_page, FIF.DOWNLOAD, "下载")
+        self.addSubInterface(self.versions_page, FIF.LIBRARY, "下载")
+        self.addSubInterface(self.downloads_page, FIF.DOWNLOAD, "任务管理")
+        self.addSubInterface(self.instances_page, FIF.GAME, "实例管理")
         self.addSubInterface(self.account_page, FIF.PEOPLE, "账号")
         self.addSubInterface(self.settings_page, FIF.SETTING, "设置", NavigationItemPosition.BOTTOM)
 
@@ -96,6 +99,8 @@ class MainWindow(FluentWindow):
             self.account_page.refresh()
         elif page is self.home_page:
             self.home_page.refresh()
+        elif page is self.instances_page:
+            self.instances_page.refresh()
 
     def _refresh_all(self) -> None:
         self.home_page.refresh()

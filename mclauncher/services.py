@@ -45,7 +45,7 @@ class LauncherService:
     def __init__(self, game_dir: str | Path | None = None, config_dir: str | Path | None = None):
         self.config = Config(Path(config_dir) if config_dir else None)
         self.paths = self._build_paths(game_dir)
-        self.repo = VersionRepository(self.paths)
+        self.repo = VersionRepository(self.paths, mirror_func=self.apply_mirror)
 
     def _build_paths(self, game_dir: str | Path | None = None) -> Paths:
         raw = game_dir or self.config.get("game_dir") or default_game_dir()
@@ -64,7 +64,8 @@ class LauncherService:
             "offline_name": self.config.get("offline_name") or "Player",
             "theme": self.config.get("theme") or "auto",
             "accent": self.config.get("accent") or "blue",
-            "isolate_versions": bool(self.config.get("isolate_versions") or False),  # ← 新增
+            "isolate_versions": bool(self.config.get("isolate_versions") or False),
+            "mirror_source": self.config.get("mirror_source") or "official",
         }
 
     def save_settings(self, values: dict[str, Any]) -> dict[str, Any]:
@@ -90,8 +91,32 @@ class LauncherService:
             self.config.set("accent", values["accent"])
         if "isolate_versions" in values:
             self.config.set("isolate_versions", bool(values["isolate_versions"]))
+        if "mirror_source" in values:
+            self.config.set("mirror_source", values["mirror_source"])
         self.config.save()
         return self.settings()
+
+    # ------------------------------------------------------------------
+    # 实例独立设置 (Instance Settings)
+    # ------------------------------------------------------------------
+    def get_instance_settings(self, version_id: str) -> dict[str, Any]:
+        """获取指定版本的独立设置，如果没有则返回空字典"""
+        all_instances = self.config.get("instance_settings") or {}
+        return all_instances.get(version_id, {})
+
+    def save_instance_settings(self, version_id: str, values: dict[str, Any]) -> dict[str, Any]:
+        """保存指定版本的独立设置"""
+        all_instances = self.config.get("instance_settings") or {}
+
+        # 如果传入空字典，表示删除该实例的独立设置（恢复全局设置）
+        if not values:
+            all_instances.pop(version_id, None)
+        else:
+            all_instances[version_id] = values
+
+        self.config.set("instance_settings", all_instances)
+        self.config.save()
+        return self.get_instance_settings(version_id)
 
     # ------------------------------------------------------------------
     # account
@@ -274,6 +299,25 @@ class LauncherService:
 
         raise AuthError(f"账号 {name!r} 不存在，请先添加")
 
+    def apply_mirror(self, url: str) -> str:
+        """将官方 URL 替换为国内镜像"""
+        if self.config.get("mirror_source") != "bmclapi":
+            return url
+        replacements = {
+            "https://launchermeta.mojang.com": "https://bmclapi2.bangbang93.com",
+            "https://piston-meta.mojang.com": "https://bmclapi2.bangbang93.com",
+            "https://piston-data.mojang.com": "https://bmclapi2.bangbang93.com",
+            "https://libraries.minecraft.net": "https://bmclapi2.bangbang93.com/maven",
+            "https://resources.download.minecraft.net": "https://bmclapi2.bangbang93.com/assets",
+            "https://meta.fabricmc.net": "https://bmclapi2.bangbang93.com/fabric-meta",
+            "https://maven.fabricmc.net": "https://bmclapi2.bangbang93.com/maven",
+            "https://maven.minecraftforge.net": "https://bmclapi2.bangbang93.com/maven",
+            "https://files.minecraftforge.net": "https://bmclapi2.bangbang93.com/maven",
+        }
+        for official, mirror in replacements.items():
+            url = url.replace(official, mirror)
+        return url
+
     # ------------------------------------------------------------------
     # versions
     # ------------------------------------------------------------------
@@ -387,6 +431,7 @@ class LauncherService:
             callback=callback,
             cancel_event=cancel_event,
             log_callback=log_callback,
+            mirror_func=self.apply_mirror,
         )
         meta = installer.install(
             version_id,
@@ -445,7 +490,17 @@ class LauncherService:
         meta = self.load_merged_version_json(version_id)
         account = self.resolve_account(offline_name)
         stream = io.StringIO()
-        java = Path(java_path) if java_path else None
+        # 读取实例独立配置，如果没有则使用全局配置
+        instance_conf = self.get_instance_settings(version_id)
+
+        # 优先使用调用时传入的参数 -> 实例配置 -> 全局配置
+        final_memory = memory_mb or instance_conf.get("memory_mb") or self.config.get("memory_mb") or 4096
+        final_java = java_path or instance_conf.get("java_path") or self.config.get("java_path")
+        final_isolate = instance_conf.get("isolate_versions")
+        if final_isolate is None:
+            final_isolate = bool(self.config.get("isolate_versions") or False)
+
+        java = Path(final_java) if final_java else None
         if java is None or not java.is_file():
             java = ensure_java(
                 meta,
@@ -456,8 +511,8 @@ class LauncherService:
                 callback=callback,
                 cancel_event=cancel_event,
             )
-        memory = parse_memory_mb(memory_mb if memory_mb is not None else self.config.get("memory_mb") or 4096)
-        isolate = bool(self.config.get("isolate_versions") or False)
+        memory = parse_memory_mb(final_memory)
+        isolate = bool(final_isolate)
         game_dir = self.paths.instance_game_dir(version_id, isolate)
         if isolate:
             # 确保版本隔离目录存在，mods/saves 等会在其中生成
@@ -587,6 +642,8 @@ class LauncherService:
     ) -> dict[str, Any]:
         import urllib.request
         import shutil
+        import copy
+        import time
 
         def check_cancel():
             if cancel_event and cancel_event.is_set():
@@ -596,11 +653,43 @@ class LauncherService:
             if log_callback:
                 log_callback(f"[*] {msg}")
 
+        def download_file_with_fallback(url: str, dest: Path):
+            """带降级逻辑的下载器：先尝试镜像，失败则回退到官方"""
+            # 生成候选 URL 列表（镜像源 + 原始官方源）
+            candidates = []
+            mirror_url = self.apply_mirror(url)
+            if mirror_url != url:
+                candidates.append(mirror_url)
+            if url not in candidates:
+                candidates.append(url)
+
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            last_err = None
+
+            for candidate in candidates:
+                try:
+                    req = urllib.request.Request(candidate, headers=headers)
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        with open(dest, 'wb') as f:
+                            f.write(resp.read())
+                    return  # 下载成功，直接返回
+                except Exception as e:
+                    last_err = e
+                    log(f"下载失败 ({candidate})：{e}")
+                    if candidate == candidates[-1]:
+                        break
+                    log("正在降级切换至备用源重试...")
+                    time.sleep(1)
+
+            raise last_err
+
         check_cancel()
 
-        # 1. 确保原版已安装
-        if not is_installed(self.paths, mc_version):
-            log(f"检测到原版 {mc_version} 未安装，准备先安装原版...")
+        # 1. 检查原版是否已安装，并记录状态
+        original_existed = is_installed(self.paths, mc_version)
+
+        if not original_existed:
+            log(f"检测到原版 {mc_version} 未安装，准备自动下载...")
             try:
                 self.install(
                     mc_version,
@@ -612,79 +701,105 @@ class LauncherService:
             except Exception as e:
                 check_cancel()
                 raise LauncherError(f"前置原版安装失败: {e}")
+        else:
+            log(f"原版 {mc_version} 已存在，直接进行合并。")
 
-        # 2. 获取 Fabric 数据
+        # 2. 获取 Fabric 数据（这里也应用降级逻辑）
         log(f"正在获取 Fabric {mc_version} 的版本信息...")
         try:
-            url = f"https://meta.fabricmc.net/v2/versions/loader/{mc_version}"
-            req = urllib.request.urlopen(url)
-            data = json.loads(req.read().decode())
+            # 先尝试镜像，再尝试官方
+            urls_to_try = [
+                self.apply_mirror(f"https://meta.fabricmc.net/v2/versions/loader/{mc_version}"),
+                f"https://meta.fabricmc.net/v2/versions/loader/{mc_version}"
+            ]
+            urls_to_try = list(dict.fromkeys(urls_to_try))  # 去重
+
+            data = None
+            for url in urls_to_try:
+                try:
+                    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req, timeout=15) as resp:
+                        data = json.loads(resp.read().decode())
+                    break
+                except Exception:
+                    continue
+            if not data:
+                raise Exception("所有源均无法获取 Fabric 列表")
+
             loader_version = data[0]["loader"]["version"]
 
-            profile_url = f"https://meta.fabricmc.net/v2/versions/loader/{mc_version}/{loader_version}/profile/json"
-            req = urllib.request.urlopen(profile_url)
-            fabric_meta = json.loads(req.read().decode())
+            # 获取 Profile 同样降级
+            profile_urls = [
+                self.apply_mirror(
+                    f"https://meta.fabricmc.net/v2/versions/loader/{mc_version}/{loader_version}/profile/json"),
+                f"https://meta.fabricmc.net/v2/versions/loader/{mc_version}/{loader_version}/profile/json"
+            ]
+            profile_urls = list(dict.fromkeys(profile_urls))
+
+            fabric_meta = None
+            for url in profile_urls:
+                try:
+                    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+                    with urllib.request.urlopen(req, timeout=15) as resp:
+                        fabric_meta = json.loads(resp.read().decode())
+                    break
+                except Exception:
+                    continue
+            if not fabric_meta:
+                raise Exception("所有源均无法获取 Fabric Profile")
+
         except Exception as e:
             check_cancel()
             raise LauncherError(f"获取 Fabric 信息失败: {e}")
 
         check_cancel()
 
-        # 3. 合并原版和 Fabric 的 JSON
-        fabric_id = f"{mc_version}-Fabric"  # 你想要的名字格式
+        # 3. 独立化合并
+        fabric_id = f"{mc_version}-Fabric"
         log(f"正在将原版和 Fabric 合并为独立目录: {fabric_id}")
 
-        # 读取原版 JSON
         vanilla_meta_path = self.paths.version_json(mc_version)
         vanilla_meta = json.loads(vanilla_meta_path.read_text(encoding="utf-8-sig"))
 
-        # 深度合并
         merged_meta = copy.deepcopy(vanilla_meta)
         merged_meta["id"] = fabric_id
 
-        # 合并 mainClass
         if "mainClass" in fabric_meta:
             merged_meta["mainClass"] = fabric_meta["mainClass"]
 
-        # 合并 arguments
         if "arguments" in fabric_meta:
             merged_meta.setdefault("arguments", {})
             for key in ["game", "jvm"]:
                 if key in fabric_meta["arguments"]:
                     merged_meta["arguments"].setdefault(key, []).extend(fabric_meta["arguments"][key])
 
-        # 合并 minecraftArguments (旧版)
         if "minecraftArguments" in fabric_meta:
             old_args = merged_meta.get("minecraftArguments", "")
             new_args = fabric_meta["minecraftArguments"]
             merged_meta["minecraftArguments"] = f"{old_args} {new_args}".strip()
 
-        # 合并 libraries
         if "libraries" in fabric_meta:
             merged_meta.setdefault("libraries", []).extend(fabric_meta["libraries"])
 
-        # 清理 inheritsFrom 和 jar 字段，让它成为一个纯独立的版本
         merged_meta.pop("inheritsFrom", None)
         merged_meta.pop("jar", None)
 
-        # 4. 创建新文件夹并写入文件
+        # 4. 写入独立版本
         v_dir = self.paths.version_dir(fabric_id)
         v_dir.mkdir(parents=True, exist_ok=True)
-
-        # 写入合并后的 JSON
         meta_path = v_dir / f"{fabric_id}.json"
         meta_path.write_text(json.dumps(merged_meta, indent=2), encoding="utf-8")
 
-        # 5. 复制原版 JAR 并重命名
+        # 5. 复制核心 JAR
         log("正在复制原版客户端 JAR...")
         src_jar = self.paths.client_jar(mc_version)
         dst_jar = self.paths.client_jar(fabric_id)
         if src_jar.is_file():
             shutil.copy2(src_jar, dst_jar)
         else:
-            raise LauncherError("原版客户端 JAR 缺失，无法完成独立合并。")
+            raise LauncherError("原版客户端 JAR 缺失。")
 
-        # 6. 下载 Fabric 依赖库
+        # 6. 下载 Fabric 依赖库（应用降级下载）
         libraries = fabric_meta.get("libraries", [])
         total = len(libraries)
         log(f"开始下载 {total} 个 Fabric 依赖库...")
@@ -702,19 +817,24 @@ class LauncherService:
             dest.parent.mkdir(parents=True, exist_ok=True)
 
             if not dest.is_file():
-                url = (lib.get("url") or "https://maven.fabricmc.net/").rstrip("/") + "/" + rel_path
+                official_url = (lib.get("url") or "https://maven.fabricmc.net/").rstrip("/") + "/" + rel_path
                 try:
-                    urllib.request.urlretrieve(url, dest)
+                    # 👇 使用自动降级的下载器
+                    download_file_with_fallback(official_url, dest)
                 except Exception as e:
                     check_cancel()
-                    log(f"下载失败: {url} -> {e}")
+                    log(f"最终下载失败: {official_url} -> {e}")
 
             if callback:
                 callback({"total": total, "current": i + 1, "percent": int((i + 1) / total * 100)})
 
-        check_cancel()
+        # 7. 核心清理
+        if not original_existed:
+            log(f"清理临时原版文件夹: {mc_version}")
+            shutil.rmtree(self.paths.version_dir(mc_version), ignore_errors=True)
+
         log(f"{fabric_id} 独立化安装完成！")
-        return {"id": fabric_id, "type": "release"}  # 标记为 release 即可，走普通启动逻辑
+        return {"id": fabric_id, "type": "release"}
 
     def install_forge(
             self,
@@ -723,6 +843,8 @@ class LauncherService:
             log_callback: LogCallback | None = None,
             cancel_event: threading.Event | None = None
     ) -> dict[str, Any]:
+        import copy
+        import shutil
 
         def check_cancel():
             if cancel_event and cancel_event.is_set():
@@ -734,9 +856,11 @@ class LauncherService:
 
         check_cancel()
 
-        # 1. 确保原版已安装
-        if not is_installed(self.paths, mc_version):
-            log(f"检测到原版 {mc_version} 未安装，准备先安装原版...")
+        # 1. 检查原版是否存在
+        original_existed = is_installed(self.paths, mc_version)
+
+        if not original_existed:
+            log(f"检测到原版 {mc_version} 未安装，准备自动下载...")
             try:
                 self.install(
                     mc_version,
@@ -749,20 +873,23 @@ class LauncherService:
                 check_cancel()
                 raise LauncherError(f"前置原版安装失败: {e}")
         else:
-            log(f"原版 {mc_version} 已存在，跳过原版安装。")
+            log(f"原版 {mc_version} 已存在，直接进行合并。")
 
         check_cancel()
-        log(f"正在获取 Forge {mc_version} 的推荐版本信息...")
 
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
 
         # 2. 获取推荐的 Forge 版本
+        # 2. 获取推荐的 Forge 版本
         try:
-            promo_url = "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json"
-            req = urllib.request.Request(promo_url, headers=headers)
-            with urllib.request.urlopen(req) as response:
+            promo_url = self.apply_mirror(
+                "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json")
+            req = urllib.request.Request(promo_url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            })
+            with urllib.request.urlopen(req, timeout=30) as response:
                 promos = json.loads(response.read().decode())
 
             forge_version = promos.get("promos", {}).get(f"{mc_version}-recommended",
@@ -776,14 +903,16 @@ class LauncherService:
 
         # 3. 下载 installer.jar
         installer_url = f"https://maven.minecraftforge.net/net/minecraftforge/forge/{mc_version}-{forge_version}/forge-{mc_version}-{forge_version}-installer.jar"
+        installer_url = self.apply_mirror(installer_url)
         installer_jar = self.paths.cache_dir / f"forge-{mc_version}-{forge_version}-installer.jar"
         installer_jar.parent.mkdir(parents=True, exist_ok=True)
 
         if not installer_jar.is_file():
             log("正在下载 Forge Installer...")
             try:
+                installer_url = self.apply_mirror(installer_url)
                 req = urllib.request.Request(installer_url, headers=headers)
-                with urllib.request.urlopen(req) as response:
+                with urllib.request.urlopen(req, timeout=30) as response:
                     with open(installer_jar, 'wb') as f:
                         f.write(response.read())
             except Exception as e:
@@ -791,7 +920,7 @@ class LauncherService:
 
         check_cancel()
 
-        # 4. 获取 Java 并执行静默安装
+        # 4. 获取 Java 并执行安装
         log("正在准备 Java 环境...")
         vanilla_meta = self.repo.meta(mc_version)
         java = ensure_java(
@@ -799,9 +928,8 @@ class LauncherService:
             stream=io.StringIO(), callback=callback, cancel_event=cancel_event
         )
 
-        log("正在执行 Forge 安装器（可能需要几分钟，请耐心等待）...")
+        log("正在执行 Forge 安装器（可能需要几分钟）...")
 
-        # 确保 game_dir 下有 launcher_profiles.json
         profiles_file = self.paths.game_dir / "launcher_profiles.json"
         if not profiles_file.is_file():
             profiles_file.write_text("{}", encoding="utf-8")
@@ -835,40 +963,68 @@ class LauncherService:
 
         check_cancel()
 
-        # 5. 独立化处理（最简单粗暴的方式）
+        # 5. 独立化处理
         log("正在创建独立化 Forge 版本...")
-
         forge_raw_id = f"{mc_version}-forge-{forge_version}"
         forge_json_path = self.paths.version_json(forge_raw_id)
 
         if not forge_json_path.is_file():
             raise LauncherError("Forge 安装器执行完毕，但未找到生成的版本 JSON。")
 
-        # 读取 Forge 安装器生成的 JSON
         forge_meta = json.loads(forge_json_path.read_text(encoding="utf-8-sig"))
 
-        # 修改它的 ID
+        # 深度合并
+        merged_meta = copy.deepcopy(vanilla_meta)
         target_id = f"{mc_version}-Forge"
-        forge_meta["id"] = target_id
+        merged_meta["id"] = target_id
 
-        # 放入新的独立文件夹
+        if "mainClass" in forge_meta:
+            merged_meta["mainClass"] = forge_meta["mainClass"]
+
+        if "arguments" in forge_meta:
+            merged_meta.setdefault("arguments", {})
+            for key in ["game", "jvm"]:
+                if key in forge_meta["arguments"]:
+                    merged_meta["arguments"].setdefault(key, []).extend(forge_meta["arguments"][key])
+
+        if "minecraftArguments" in forge_meta:
+            old_args = merged_meta.get("minecraftArguments", "")
+            new_args = forge_meta["minecraftArguments"]
+            merged_meta["minecraftArguments"] = f"{old_args} {new_args}".strip()
+
+        if "libraries" in forge_meta:
+            merged_meta.setdefault("libraries", []).extend(forge_meta["libraries"])
+
+        # 保护原版资源索引
+        if "assetIndex" in forge_meta:
+            if "assetIndex" not in merged_meta or merged_meta["assetIndex"].get("id") == "legacy":
+                merged_meta["assetIndex"] = forge_meta["assetIndex"]
+
+        merged_meta.pop("inheritsFrom", None)
+        merged_meta.pop("jar", None)
+
+        # 6. 写入独立版本并复制 JAR
         target_dir = self.paths.version_dir(target_id)
         target_dir.mkdir(parents=True, exist_ok=True)
-
         target_json_path = target_dir / f"{target_id}.json"
-        target_json_path.write_text(json.dumps(forge_meta, indent=2), encoding="utf-8")
+        target_json_path.write_text(json.dumps(merged_meta, indent=2), encoding="utf-8")
 
-        # 复制原版 JAR，让文件夹看起来完整
         log("正在复制原版客户端 JAR...")
         src_jar = self.paths.client_jar(mc_version)
         dst_jar = self.paths.client_jar(target_id)
         if src_jar.is_file():
             shutil.copy2(src_jar, dst_jar)
         else:
-            raise LauncherError("原版客户端 JAR 缺失，无法完成独立复制。")
+            raise LauncherError("原版客户端 JAR 缺失。")
 
-        # 6. 清理原版生成的 forge 文件夹（可选）
-        shutil.rmtree(self.paths.version_dir(forge_raw_id), ignore_errors=True)
+        # 👇 7. 清理中间产物与原版
+        if forge_raw_id != mc_version and forge_raw_id != target_id:
+            log(f"清理中间产物: {forge_raw_id}")
+            shutil.rmtree(self.paths.version_dir(forge_raw_id), ignore_errors=True)
+
+        if not original_existed:
+            log(f"清理临时原版文件夹: {mc_version}")
+            shutil.rmtree(self.paths.version_dir(mc_version), ignore_errors=True)
 
         log(f"{target_id} 独立化安装完成！")
         return {"id": target_id, "type": "release"}

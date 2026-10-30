@@ -145,7 +145,7 @@ class DownloadsPage(QWidget):
         header = QHBoxLayout()
         titles = QVBoxLayout()
         titles.setSpacing(2)
-        title = TitleLabel("下载", self)
+        title = TitleLabel("任务管理", self)
         # 👇 替换 setStyleSheet
         font = title.font()
         font.setPixelSize(26)

@@ -116,20 +116,7 @@ class HomePage(QWidget):
         self.play_button.setFixedHeight(38)
         self.play_button.setMinimumWidth(132)
         self.play_button.setCursor(Qt.PointingHandCursor)
-        self.play_button.setStyleSheet(
-            """
-            PrimaryPushButton {
-                background: white; 
-                color: #0A3557; 
-                border-radius: 8px;
-                font-weight: 700; 
-                font-size: 10pt;
-            }
-            PrimaryPushButton:hover { background: #F0F6FF; }
-            PrimaryPushButton:pressed { background: #E0EDF9; }
-            PrimaryPushButton:disabled { background: rgba(255,255,255,0.35); color: rgba(10,53,87,0.6); }
-            """
-        )
+
         self.play_button.clicked.connect(self._request_play)
         actions.addWidget(self.play_button)
 

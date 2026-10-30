@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, TextIO, Callable
 
 from .errors import LauncherError
 from .net import download_file, get_json
@@ -24,9 +24,10 @@ ALIASES = {
 
 
 class VersionRepository:
-    def __init__(self, paths: Paths, stream: TextIO | None = None):
+    def __init__(self, paths: Paths, stream: TextIO | None = None, mirror_func: Callable[[str], str] | None = None):
         self.paths = paths
         self.stream = stream
+        self.mirror_func = mirror_func or (lambda url: url)
 
     # ------------------------------------------------------------------
     def manifest(self, force: bool = False) -> dict[str, Any]:
@@ -36,7 +37,8 @@ class VersionRepository:
             if isinstance(data, dict) and "versions" in data:
                 return data
         try:
-            data = get_json(MANIFEST_URL)
+            url = self.mirror_func(MANIFEST_URL)
+            data = get_json(url)
             if not isinstance(data, dict) or "versions" not in data:
                 raise LauncherError("Mojang 返回的版本清单格式异常")
             write_json_atomic(cache, data)
@@ -73,7 +75,7 @@ class VersionRepository:
             if isinstance(data, dict) and data.get("id") == version_id:
                 return data
         entry = self.resolve(version_id)
-        url = entry["url"]
+        url = self.mirror_func(entry["url"])
         local.parent.mkdir(parents=True, exist_ok=True)
         tmp = local.with_name(local.name + ".download")
         try:

@@ -39,13 +39,16 @@ def _artifact_url(entry: dict[str, Any] | None, relative: str) -> str:
 
 
 def build_library_plan(
-    meta: dict[str, Any],
-    paths: Paths,
-    ctx: dict[str, Any] | None = None,
+        meta: dict[str, Any],
+        paths: Paths,
+        ctx: dict[str, Any] | None = None,
+        mirror_func: Callable[[str], str] | None = None,
 ) -> LibraryPlan:
     """根据版本 JSON 计算需要下载的库、classpath 顺序以及需要解压的 natives。"""
     ctx = ctx or build_context()
     os_name = current_os()
+    mirror_func = mirror_func or (lambda url: url)
+
     plan = LibraryPlan()
     seen: dict[str, DownloadTask] = {}
     classpath_seen: set[str] = set()
@@ -53,6 +56,8 @@ def build_library_plan(
     def add_task(task: DownloadTask) -> None:
         key = str(task.dest).lower()
         if key not in seen:
+            # 👇 在加入任务队列时，统一应用镜像转换
+            task.url = mirror_func(task.url)
             seen[key] = task
             plan.tasks.append(task)
 
@@ -130,6 +135,7 @@ class Installer:
         callback: Callable[[dict], None] | None = None,
         cancel_event: threading.Event | None = None,
         log_callback: Callable[[str], None] | None = None,
+        mirror_func: Callable[[str], str] | None = None,
     ):
         self.paths = paths
         self.workers = max(1, workers)
@@ -139,6 +145,7 @@ class Installer:
         self.cancel_event = cancel_event
         self.log_callback = log_callback
         self.repo = VersionRepository(paths, self.stream)
+        self.mirror_func = mirror_func or (lambda url: url)
 
     # ------------------------------------------------------------------
     def log(self, message: str = "") -> None:
@@ -215,12 +222,12 @@ class Installer:
             self.log("[*] 客户端 jar 已存在")
             return
         self._download(
-            [DownloadTask(client["url"], dest, client.get("sha1"), client.get("size"))],
+            [DownloadTask(self.mirror_func(client["url"]), dest, client.get("sha1"), client.get("size"))],
             "下载客户端 jar",
         )
 
     def _install_libraries(self, meta: dict[str, Any]) -> None:
-        plan = build_library_plan(meta, self.paths)
+        plan = build_library_plan(meta, self.paths, mirror_func=self.mirror_func)
         self._download(plan.tasks, f"下载依赖库 ({len(plan.tasks)})")
         self._extract_natives(meta["id"], plan.native_jars)
 
@@ -280,7 +287,7 @@ class Installer:
             seen.add(digest)
             tasks.append(
                 DownloadTask(
-                    f"{RESOURCES_BASE}{digest[:2]}/{digest}",
+                    self.mirror_func(f"{RESOURCES_BASE}{digest[:2]}/{digest}"),
                     self.paths.assets_objects / digest[:2] / digest,
                     digest,
                     obj.get("size"),

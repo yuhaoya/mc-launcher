@@ -124,6 +124,21 @@ class SettingsPage(QWidget):
             )
         )
 
+        network_group = SettingCardGroup("网络与下载", container)
+        self.mirror_combo = ComboBox(container)
+        self.mirror_combo.addItem("自动 / 官方 (Mojang)", userData="official")
+        self.mirror_combo.addItem("国内镜像 (BMCLAPI)", userData="bmclapi")
+        self.mirror_combo.setFixedWidth(200)
+        network_group.addSettingCard(
+            SettingRow(
+                FluentIcon.GLOBE,
+                "下载镜像源",
+                "国内用户建议开启 BMCLAPI 镜像，可加速原版、Fabric 和 Forge 的下载。",
+                self.mirror_combo,
+            )
+        )
+        content.addWidget(network_group)
+
         paths = SettingCardGroup("目录", container)
         self.game_dir_input = LineEdit(container)
         self.game_dir_input.setMinimumWidth(340)
@@ -189,7 +204,8 @@ class SettingsPage(QWidget):
             "java_path": self.java_combo.currentData() or "",
             "game_dir": self.game_dir_input.text().strip(),
             "offline_name": self.offline_input.text().strip(),
-            "isolate_versions": self.isolate_switch.isChecked(),  # ← 新增
+            "isolate_versions": self.isolate_switch.isChecked(),
+            "mirror_source": self.mirror_combo.currentData(),
         }
         self.saveRequested.emit(values)
 
@@ -202,6 +218,7 @@ class SettingsPage(QWidget):
         self.config_dir_label.setText(str(settings.get("config_dir") or ""))
         self.isolate_switch.setChecked(bool(settings.get("isolate_versions")))
         self.offline_input.setText(str(settings.get("offline_name") or "Player"))
+        self.mirror_combo.setCurrentIndex(max(0, self.mirror_combo.findData(settings.get("mirror_source"))))
 
         configured = str(settings.get("java_path") or "")
 
