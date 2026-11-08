@@ -272,7 +272,13 @@ class LauncherService:
         if not names:
             raise AuthError("至少保留一个离线账号")
         self.config.set("offline_names", names)
-        if str(self.config.get("offline_name") or "Player") == name:
+
+        active = self.config.get("active_account") or {}
+        is_active = active.get("kind") == "offline" and active.get("name") == name
+        if is_active:
+            self.config.set("active_account", {"kind": "offline", "name": names[0]})
+            self.config.set("offline_name", names[0])
+        elif str(self.config.get("offline_name") or "Player") == name:
             self.config.set("offline_name", names[0])
         self.config.save()
 
@@ -439,6 +445,52 @@ class LauncherService:
             with_java=with_java,
         )
         return {"id": meta.get("id", version_id), "type": meta.get("type", "release")}
+
+    def uninstall(self, version_id: str, remove_instance_dir: bool = True) -> dict[str, Any]:
+        """删除一个版本。原版只删 versions/<id>；实例数据在隔离目录里一并删除。"""
+        version_id = str(version_id or "").strip()
+        if not version_id:
+            raise LauncherError("版本名不能为空")
+
+        version_dir = self.paths.version_dir(version_id)
+        if not version_dir.exists():
+            raise LauncherError(f"版本 {version_id} 不存在")
+
+        # 被依赖的父版本不能删除
+        dependents = [
+            item["id"]
+            for item in self.installed_versions()
+            if item["id"] != version_id and self._inherits_from(item["id"], version_id)
+        ]
+        if dependents:
+            raise LauncherError(
+                f"{version_id} 被 {', '.join(dependents[:3])} 依赖，请先删除这些版本。"
+            )
+
+        freed = 0
+        if version_dir.is_dir():
+            for path in version_dir.rglob("*"):
+                try:
+                    if path.is_file():
+                        freed += path.stat().st_size
+                except OSError:
+                    pass
+            shutil.rmtree(version_dir, ignore_errors=False)
+
+        if remove_instance_dir:
+            # 版本隔离目录就是 versions/<id>，已在上一步删除；这里清理独立设置
+            self.save_instance_settings(version_id, {})
+
+        return {"id": version_id, "freed": freed, "freed_text": human_size(freed)}
+
+    def _inherits_from(self, version_id: str, parent_id: str) -> bool:
+        try:
+            import json
+
+            data = json.loads(self.paths.version_json(version_id).read_text(encoding="utf-8-sig"))
+        except Exception:
+            return False
+        return data.get("inheritsFrom") == parent_id
 
     def resolve_account(self, offline_name: str | None = None) -> Account:
         name = (offline_name or "").strip()

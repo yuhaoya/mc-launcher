@@ -86,7 +86,7 @@ class Paths:
     def library_path(self, relative: str) -> Path:
         return self.libraries / Path(*relative.split("/"))
 
-    def describe(self) -> str:
+    def describe(self, isolate: bool = False) -> str:
         lines = [
             f"游戏目录   : {self.game_dir}",
             f"配置目录   : {self.config_dir}",
@@ -94,7 +94,6 @@ class Paths:
             f"依赖库目录 : {self.libraries}",
             f"资源目录   : {self.assets}",
             f"Java 运行时: {self.runtime}",
-
         ]
         lines.append(f"版本隔离   : {'开' if isolate else '关'}")
         return "\n".join(lines)

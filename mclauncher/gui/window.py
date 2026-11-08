@@ -70,6 +70,7 @@ class MainWindow(FluentWindow):
         self.versions_page.installForgeRequested.connect(lambda vid: self._start_install(vid, "forge"))
         self.versions_page.launchRequested.connect(self._launch)
         self.versions_page.openFolderRequested.connect(self._open_version_folder)
+        self.versions_page.uninstallRequested.connect(self._uninstall_version)
 
         self.downloads_page.cancelRequested.connect(self._cancel_install)
 
@@ -109,7 +110,6 @@ class MainWindow(FluentWindow):
 
     # ------------------------------------------------------------------
     def _start_install(self, version_id: str, loader: str = "vanilla") -> None:
-        print(f"DEBUG: 收到安装请求 version={version_id}, loader={loader}")
         if self._install_task is not None:
             InfoBar.info("已有安装任务", "请等待当前安装完成。", parent=self, position=InfoBarPosition.TOP_RIGHT)
             self.switchTo(self.downloads_page)
@@ -217,26 +217,8 @@ class MainWindow(FluentWindow):
             )
             return
         settings = self.service.settings()
-        print(f"DEBUG: settings is {settings}") # 👈 打印看看
         self.home_page.play_button.setEnabled(False)
         self.home_page.play_button.setText("准备启动…")
-
-        print("DEBUG account:", self.service.account())
-
-        def _run_launch(w):
-            try:
-                return self.service.launch(
-                    version_id,
-                    memory_mb=settings.get("memory_mb"),
-                    java_path=settings.get("java_path") or None,
-                    callback=w.signals.progress.emit,
-                    log_callback=w.signals.log.emit,
-                    on_started=w.signals.started.emit,
-                )
-            except AttributeError as e:
-                import traceback
-                traceback.print_exc()  # 这会在后台把完整的代码报错位置打印到控制台
-                raise e
 
         worker = Worker(
             lambda w: self.service.launch(
@@ -349,6 +331,22 @@ class MainWindow(FluentWindow):
         path = self.service.paths.version_dir(version_id)
         if path.is_dir():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    def _uninstall_version(self, version_id: str) -> None:
+        try:
+            result = self.service.uninstall(version_id)
+        except Exception as exc:
+            InfoBar.error("卸载失败", str(exc), parent=self, duration=5000)
+            return
+        self._refresh_all()
+        self.versions_page.refresh_installed()
+        self.instances_page.refresh()
+        InfoBar.success(
+            "已卸载",
+            f"Minecraft {result['id']} 已删除，释放 {result.get('freed_text') or '0 B'}。",
+            parent=self,
+            duration=3000,
+        )
 
     # ------------------------------------------------------------------
     def closeEvent(self, event) -> None:

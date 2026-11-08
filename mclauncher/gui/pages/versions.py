@@ -35,6 +35,7 @@ from qfluentwidgets import (
     TableView,
     TabWidget,
     ListWidget,
+    MessageBox,
 )
 
 from ...services import LauncherService
@@ -49,6 +50,7 @@ class VersionsPage(QWidget):
     installForgeRequested = Signal(str)
     launchRequested = Signal(str)
     openFolderRequested = Signal(str)
+    uninstallRequested = Signal(str)
 
     
 
@@ -224,6 +226,13 @@ class VersionsPage(QWidget):
         self.folder_button.clicked.connect(self._open_folder)
         detail_layout.addWidget(self.folder_button)
 
+        self.uninstall_button = PushButton(self.detail)
+        self.uninstall_button.setText("卸载此版本")
+        self.uninstall_button.setIcon(FluentIcon.DELETE)
+        self.uninstall_button.setEnabled(False)
+        self.uninstall_button.clicked.connect(self._uninstall)
+        detail_layout.addWidget(self.uninstall_button)
+
         content.addWidget(self.detail, 3)
         version_layout.addLayout(content, 1)
 
@@ -385,6 +394,22 @@ class VersionsPage(QWidget):
             self.primary_button.setIcon(FluentIcon.DOWNLOAD)
             self.loader_combo.show()  # 👈 未安装版本，显示加载器选择
         self.folder_button.setEnabled(installed)
+        self.uninstall_button.setEnabled(installed)
+
+    def _uninstall(self) -> None:
+        version_id = self.current_version_id()
+        if not version_id:
+            return
+        box = MessageBox(
+            "卸载版本",
+            f"确定要删除 {version_id} 吗？\\n版本文件（含隔离目录里的存档与 Mod）会被一起删除，无法恢复。",
+            self.window(),
+        )
+        box.yesButton.setText("删除")
+        box.cancelButton.setText("取消")
+        if not box.exec():
+            return
+        self.uninstallRequested.emit(version_id)
 
     def _primary_action(self) -> None:
         version_id = self.current_version_id()

@@ -7,6 +7,7 @@ from typing import Any
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
     DataTable,
@@ -18,6 +19,7 @@ from textual.widgets import (
     RichLog,
     Select,
     Static,
+    Switch,
     TabbedContent,
     TabPane,
 )
@@ -77,6 +79,25 @@ DataTable {
     height: 1;
     color: #8b949e;
 }
+#instances-table {
+    height: 1fr;
+}
+#instance-detail {
+    height: auto;
+}
+#confirm-body {
+    padding: 1 2;
+}
+ConfirmScreen {
+    align: center middle;
+}
+ConfirmScreen > Vertical {
+    width: 60;
+    height: auto;
+    border: round #1f6feb;
+    background: #161b22;
+    padding: 1 2;
+}
 #download-progress {
     margin: 1 0;
 }
@@ -102,6 +123,29 @@ VerticalScroll {
 """
 
 
+class ConfirmScreen(ModalScreen[bool]):
+    """简单的确认弹窗，用于卸载等不可撤销操作。"""
+
+    BINDINGS = [("escape", "dismiss(False)", "取消")]
+
+    def __init__(self, title: str, body: str, confirm_text: str = "确认"):
+        super().__init__()
+        self.title_text = title
+        self.body_text = body
+        self.confirm_text = confirm_text
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static(f"[bold #58a6ff]{self.title_text}[/]", id="confirm-title")
+            yield Static(self.body_text, id="confirm-body")
+            with Horizontal():
+                yield Button(self.confirm_text, id="confirm-yes", variant="error")
+                yield Button("取消", id="confirm-no")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "confirm-yes")
+
+
 class MCLTuiApp(App):
     CSS = CSS
     TITLE = "MCL Studio TUI"
@@ -112,8 +156,9 @@ class MCLTuiApp(App):
         ("1", "tab('dashboard')", "仪表盘"),
         ("2", "tab('versions')", "版本"),
         ("3", "tab('downloads')", "下载"),
-        ("4", "tab('account')", "账号"),
-        ("5", "tab('settings')", "设置"),
+        ("4", "tab('instances')", "实例"),
+        ("5", "tab('account')", "账号"),
+        ("6", "tab('settings')", "设置"),
     ]
 
     def __init__(self, game_dir: str | Path | None = None, config_dir: str | Path | None = None):
@@ -161,6 +206,7 @@ class MCLTuiApp(App):
                     )
                     yield Button("刷新清单", id="versions-refresh")
                     yield Button("安装 / 启动", id="versions-action", variant="primary")
+                    yield Button("卸载", id="versions-uninstall", variant="error")
                 yield DataTable(id="versions-table")
                 yield Static("正在加载版本清单…", id="versions-status")
             with TabPane("下载", id="downloads"):
@@ -171,14 +217,29 @@ class MCLTuiApp(App):
                     yield Button("取消当前任务", id="download-cancel", disabled=True)
                     yield Button("清理日志", id="download-clear")
                 yield RichLog(id="download-log", markup=True, wrap=True)
+            with TabPane("实例", id="instances"):
+                yield Static("版本隔离与实例目录", classes="section")
+                yield Static(
+                    "[#8b949e]开启隔离后，每个版本的 mods / saves / 配置都会存放在 versions/<版本>/ 下。[/]",
+                    id="instances-hint",
+                )
+                yield DataTable(id="instances-table")
+                with Horizontal():
+                    yield Button("打开实例目录", id="instance-open")
+                    yield Button("刷新", id="instance-refresh")
             with TabPane("账号", id="account"):
                 yield Static("", id="account-detail", classes="card")
                 with Horizontal():
                     yield Button("登录微软账号", id="login", variant="primary")
                     yield Button("退出登录", id="logout")
-                yield Static("离线账号", classes="section")
+                yield Static("已保存账号", classes="section")
+                yield DataTable(id="accounts-table")
+                with Horizontal():
+                    yield Button("切换到此账号", id="account-switch", variant="primary")
+                    yield Button("删除账号", id="account-remove", variant="error")
+                yield Static("新增离线账号", classes="section")
                 yield Input(placeholder="离线用户名，1–16 个字符", id="offline-name")
-                yield Button("使用此离线名字", id="offline-apply")
+                yield Button("添加并切换", id="offline-apply")
                 yield RichLog(id="account-log", markup=True, wrap=True)
             with TabPane("设置", id="settings"):
                 with VerticalScroll():
@@ -189,6 +250,10 @@ class MCLTuiApp(App):
                     yield Input(id="game-dir-input")
                     yield Label("Java 路径（留空自动选择）")
                     yield Input(placeholder="例如 C:\\Java\\bin\\java.exe", id="java-input")
+                    yield Static("版本隔离", classes="section")
+                    with Horizontal():
+                        yield Switch(id="isolate-switch")
+                        yield Label("启用版本隔离（每个版本独立 mods / saves）", id="isolate-label")
                     yield Static("外观", classes="section")
                     yield Select(
                         [("跟随系统", "auto"), ("浅色", "light"), ("深色", "dark")],
@@ -209,8 +274,15 @@ class MCLTuiApp(App):
         versions_table = self.query_one("#versions-table", DataTable)
         versions_table.cursor_type = "row"
         versions_table.add_columns("版本", "类型", "发布时间", "状态")
+        instances_table = self.query_one("#instances-table", DataTable)
+        instances_table.cursor_type = "row"
+        instances_table.add_columns("版本", "类型", "隔离目录", "存档数")
+        accounts_table = self.query_one("#accounts-table", DataTable)
+        accounts_table.cursor_type = "row"
+        accounts_table.add_columns("玩家名", "类型", "UUID", "状态")
         self.refresh_dashboard()
         self.load_settings()
+        self.refresh_instances()
         self.load_versions()
 
     def refresh_dashboard(self) -> None:
@@ -257,7 +329,56 @@ class MCLTuiApp(App):
         self.query_one("#java-input", Input).value = str(settings.get("java_path") or "")
         self.query_one("#offline-name", Input).value = str(settings.get("offline_name") or "Player")
         self.query_one("#theme-select", Select).value = str(settings.get("theme") or "auto")
+        self.query_one("#isolate-switch", Switch).value = bool(settings.get("isolate_versions"))
         self.refresh_account()
+        self.refresh_accounts()
+
+    def refresh_instances(self) -> None:
+        table = self.query_one("#instances-table", DataTable)
+        table.clear()
+        for item in self.service.installed_versions():
+            instance_dir = self.service.paths.instance_dir(item["id"])
+            saves = instance_dir / "saves"
+            saves_count = 0
+            if saves.is_dir():
+                try:
+                    saves_count = sum(1 for p in saves.iterdir() if p.is_dir())
+                except OSError:
+                    saves_count = 0
+            exists = "已创建" if instance_dir.is_dir() else "未创建"
+            table.add_row(
+                item["id"],
+                item.get("type", "release"),
+                exists,
+                str(saves_count),
+                key=item["id"],
+            )
+
+    def refresh_accounts(self) -> None:
+        table = self.query_one("#accounts-table", DataTable)
+        table.clear()
+        for entry in self.service.list_accounts():
+            table.add_row(
+                entry["name"],
+                entry.get("kind", "离线账号"),
+                str(entry.get("uuid", ""))[:8],
+                "当前" if entry.get("active") else "",
+                key=entry["name"],
+            )
+
+    def _selected_account_name(self) -> str:
+        table = self.query_one("#accounts-table", DataTable)
+        if table.cursor_row < 0:
+            return ""
+        row = table.get_row_at(table.cursor_row)
+        return str(row[0]) if row else ""
+
+    def _selected_instance_id(self) -> str:
+        table = self.query_one("#instances-table", DataTable)
+        if table.cursor_row < 0:
+            return ""
+        row = table.get_row_at(table.cursor_row)
+        return str(row[0]) if row else ""
 
     def refresh_account(self) -> None:
         account = self.service.account()
@@ -493,6 +614,7 @@ class MCLTuiApp(App):
             f"[#3fb950][+] 登录成功：{account.get('name')}[/]"
         )
         self.refresh_account()
+        self.refresh_accounts()
         self.refresh_dashboard()
         self.notify(f"欢迎，{account.get('name')}", severity="information")
 
@@ -510,6 +632,7 @@ class MCLTuiApp(App):
                 "game_dir": self.query_one("#game-dir-input", Input).value.strip(),
                 "java_path": self.query_one("#java-input", Input).value.strip(),
                 "theme": self.query_one("#theme-select", Select).value,
+                "isolate_versions": self.query_one("#isolate-switch", Switch).value,
             }
             self.service.save_settings(values)
         except Exception as exc:
@@ -518,18 +641,96 @@ class MCLTuiApp(App):
             return
         self.query_one("#settings-status", Static).update("[#3fb950]设置已保存。[/]")
         self.refresh_dashboard()
+        self.refresh_instances()
         self.notify("设置已保存", severity="information")
 
     def _apply_offline(self) -> None:
         name = self.query_one("#offline-name", Input).value.strip()
         try:
-            self.service.save_settings({"offline_name": name})
+            self.service.add_offline_account(name)
+            self.service.switch_account(name)
         except Exception as exc:
             self.notify(str(exc), severity="error")
             return
         self.refresh_account()
+        self.refresh_accounts()
         self.refresh_dashboard()
         self.notify(f"已切换离线账号：{name}", severity="information")
+
+    def _switch_account(self) -> None:
+        name = self._selected_account_name()
+        if not name:
+            self.notify("请先在列表中选择一个账号", severity="warning")
+            return
+        try:
+            self.service.switch_account(name)
+        except Exception as exc:
+            self.notify(str(exc), severity="error")
+            return
+        self.refresh_account()
+        self.refresh_accounts()
+        self.refresh_dashboard()
+        self.notify(f"已切换到 {name}", severity="information")
+
+    def _remove_account(self) -> None:
+        name = self._selected_account_name()
+        if not name:
+            self.notify("请先在列表中选择一个账号", severity="warning")
+            return
+        try:
+            self.service.remove_offline_account(name)
+        except Exception as exc:
+            self.notify(str(exc), severity="error")
+            return
+        self.refresh_account()
+        self.refresh_accounts()
+        self.refresh_dashboard()
+        self.notify(f"已删除账号 {name}", severity="information")
+
+    def _open_instance_dir(self) -> None:
+        version_id = self._selected_instance_id()
+        if not version_id:
+            self.notify("请先在列表中选择一个版本", severity="warning")
+            return
+        path = self.service.paths.instance_dir(version_id)
+        path.mkdir(parents=True, exist_ok=True)
+        for sub in ("mods", "saves", "resourcepacks", "shaderpacks", "config"):
+            (path / sub).mkdir(exist_ok=True)
+        self.notify(f"实例目录已就绪：{path}", severity="information")
+        self.refresh_instances()
+
+    def _uninstall(self, version_id: str) -> None:
+        if not version_id:
+            self.notify("请先选择一个版本", severity="warning")
+            return
+        if version_id not in self._installed_ids:
+            self.notify("这个版本还没有安装", severity="warning")
+            return
+
+        def handle(confirmed: bool | None) -> None:
+            if not confirmed:
+                return
+            try:
+                result = self.service.uninstall(version_id)
+            except Exception as exc:
+                self.notify(f"卸载失败：{exc}", severity="error")
+                return
+            self.refresh_dashboard()
+            self.refresh_instances()
+            self._populate_versions()
+            self.notify(
+                f"已卸载 {version_id}，释放 {result.get('freed_text') or '0 B'}",
+                severity="information",
+            )
+
+        self.push_screen(
+            ConfirmScreen(
+                "卸载版本",
+                f"删除 [bold]{version_id}[/] 及其隔离目录（包含存档与 Mod），此操作无法撤销。",
+                "删除",
+            ),
+            handle,
+        )
 
     # ------------------------------------------------------------------
     def action_tab(self, pane_id: str) -> None:
@@ -537,6 +738,8 @@ class MCLTuiApp(App):
 
     def action_refresh(self) -> None:
         self.refresh_dashboard()
+        self.refresh_instances()
+        self.refresh_accounts()
         self.load_versions()
 
     def action_install(self) -> None:
@@ -559,6 +762,16 @@ class MCLTuiApp(App):
                 self._launch(version_id)
             else:
                 self._install(version_id)
+        elif button_id == "versions-uninstall":
+            self._uninstall(self._selected_version_id())
+        elif button_id == "instance-refresh":
+            self.refresh_instances()
+        elif button_id == "instance-open":
+            self._open_instance_dir()
+        elif button_id == "account-switch":
+            self._switch_account()
+        elif button_id == "account-remove":
+            self._remove_account()
         elif button_id == "download-cancel":
             if self._install_cancel is not None:
                 self._install_cancel.set()
@@ -571,6 +784,7 @@ class MCLTuiApp(App):
         elif button_id == "logout":
             self.service.logout()
             self.refresh_account()
+            self.refresh_accounts()
             self.refresh_dashboard()
             self.notify("已退出微软账号", severity="information")
         elif button_id == "offline-apply":

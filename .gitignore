@@ -5,6 +5,7 @@ build/
 dist/
 .venv/
 venv/
+venv_win7/
 
 # 本地测试产生的目录与日志（不要提交几百 MB 的游戏文件）
 .test-mc/
@@ -33,3 +34,10 @@ mcl/cache/
 
 # 旧的 CLI 可执行文件（保留源码即可）
 bin/mcl.exe
+
+# 构建与崩溃产物
+*.spec
+nuitka-crash-report.xml
+bin/cov*.bat
+
+*.ps1
