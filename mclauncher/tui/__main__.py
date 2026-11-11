@@ -7,7 +7,7 @@ from .app import MCLTuiApp
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="mcl-tui", description="MCL Studio TUI - 终端 Minecraft 启动器")
+    parser = argparse.ArgumentParser(prog="mcl-tui", description="Micalith Launcher TUI - 终端 Minecraft 启动器")
     parser.add_argument("--game-dir", default=None, help="游戏目录")
     parser.add_argument("--config-dir", default=None, help="配置目录")
     args = parser.parse_args(argv)

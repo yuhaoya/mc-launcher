@@ -54,7 +54,7 @@ def main() -> int:
     meipass = getattr(sys, "_MEIPASS", "") or "(无)"
 
     say("=" * 70)
-    say("MCL Studio · Win7 诊断 (WinError 87)")
+    say("Micalith Launcher · Win7 诊断 (WinError 87)")
     say("=" * 70)
     say(f"Python      : {sys.version.split()[0]}")
     say(f"Windows     : {win.major}.{win.minor} build {win.build}")

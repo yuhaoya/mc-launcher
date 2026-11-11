@@ -150,7 +150,7 @@ class ConfirmScreen(ModalScreen[bool]):
 
 class MCLTuiApp(App):
     CSS = CSS
-    TITLE = "MCL Studio TUI"
+    TITLE = "Micalith Launcher TUI"
     SUB_TITLE = "Minecraft Java Edition 启动器"
     BINDINGS = [
         ("q", "quit", "退出"),
@@ -187,7 +187,7 @@ class MCLTuiApp(App):
             with TabPane("仪表盘", id="dashboard"):
                 with VerticalScroll():
                     yield Static(
-                        "[bold #58a6ff]MCL Studio[/]\n"
+                        "[bold #58a6ff]Micalith Launcher[/]\n"
                         "[#8b949e]原版 Minecraft 启动器 · Fluent 2 UI / 终端双前端[/]\n\n"
                         "安装、启动与账号管理共用同一套启动核心。",
                         id="hero",

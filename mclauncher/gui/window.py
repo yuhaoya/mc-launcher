@@ -34,7 +34,7 @@ class MainWindow(FluentWindow):
         self._install_task: dict | None = None
         self._game_worker: Worker | None = None
         self._game_pid = 0
-        self.setWindowTitle("MCL Studio")
+        self.setWindowTitle("Micalith Launcher")
         self.resize(1240, 820)
         self.setMinimumSize(1060, 700)
         try:

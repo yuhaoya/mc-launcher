@@ -16,7 +16,7 @@ from .window import MainWindow
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="mcl-gui", description="MCL Studio - Fluent Design 2 Minecraft 启动器")
+    parser = argparse.ArgumentParser(prog="mcl-gui", description="Micalith Launcher - Fluent Design 2 Minecraft 启动器")
     parser.add_argument("--game-dir", default=None, help="游戏目录")
     parser.add_argument("--config-dir", default=None, help="配置目录")
     parser.add_argument("--screenshot", default=None, help="渲染窗口并保存 PNG 后退出（测试用）")
@@ -26,7 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="跳过 HTTPS 证书校验（仅供代理/证书异常时临时排查）",
     )
-    parser.add_argument("--version", action="version", version=f"MCL Studio {__version__}")
+    parser.add_argument("--version", action="version", version=f"Micalith Launcher {__version__}")
     return parser
 
 
@@ -38,8 +38,8 @@ def main(argv: list[str] | None = None) -> int:
     os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication([sys.argv[0]])
-    app.setApplicationName("MCL Studio")
-    app.setApplicationDisplayName("MCL Studio")
+    app.setApplicationName("Micalith Launcher")
+    app.setApplicationDisplayName("Micalith Launcher")
     app.setOrganizationName("mclauncher")
     apply_font(app)
 
