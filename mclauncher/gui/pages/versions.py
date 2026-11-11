@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import urllib.parse
-import urllib.request
 import json
 
 from PySide6.QtCore import QThreadPool, Qt, Signal
@@ -13,29 +11,30 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QListWidgetItem,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
-    QListWidgetItem
 )
 from qfluentwidgets import (
     CaptionLabel,
+    ComboBox,
     FluentIcon,
+    IconWidget,
     InfoBar,
     InfoBarPosition,
+    ListWidget,
+    MessageBox,
     PrimaryPushButton,
     PushButton,
     SearchLineEdit,
     SegmentedWidget,
     SimpleCardWidget,
     StrongBodyLabel,
+    TabWidget,
+    TableView,
     TitleLabel,
     TransparentToolButton,
-    ComboBox,
-    TableView,
-    TabWidget,
-    ListWidget,
-    MessageBox,
 )
 
 from ...services import LauncherService
@@ -44,6 +43,9 @@ from ..theme import palette, rgba
 from ..widgets import SectionHeader, SettingRow
 from ..workers import Worker
 
+SOURCE_LABELS = {"modrinth": "Modrinth", "curseforge": "CurseForge"}
+
+
 class VersionsPage(QWidget):
     installRequested = Signal(str)
     installFabricRequested = Signal(str)
@@ -51,6 +53,7 @@ class VersionsPage(QWidget):
     launchRequested = Signal(str)
     openFolderRequested = Signal(str)
     uninstallRequested = Signal(str)
+    contentRequested = Signal(dict)
 
     
 
@@ -64,6 +67,7 @@ class VersionsPage(QWidget):
         self._loading = False
         self._rows: list[dict] = []
         self._worker: Worker | None = None
+        self._content_worker: Worker | None = None
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -96,7 +100,7 @@ class VersionsPage(QWidget):
         # 引入 TabWidget
         self.tab_widget = TabWidget(self)
         self.version_tab = QWidget()
-        self.mod_tab = QWidget()
+        self.content_tab = QWidget()
 
         # ============ Tab 1: 原有的版本列表 ============
         version_layout = QVBoxLayout(self.version_tab)
@@ -236,35 +240,73 @@ class VersionsPage(QWidget):
         content.addWidget(self.detail, 3)
         version_layout.addLayout(content, 1)
 
-        # ============ Tab 2: Mod 资源搜索 ============
-        mod_layout = QVBoxLayout(self.mod_tab)
-        mod_layout.setContentsMargins(0, 10, 0, 0)
-        mod_toolbar = QHBoxLayout()
+        # ============ Tab 2: 模组 / 资源包下载 ============
+        content_layout = QVBoxLayout(self.content_tab)
+        content_layout.setContentsMargins(0, 10, 0, 0)
+        content_layout.setSpacing(12)
 
-        self.mod_source = ComboBox(self.mod_tab)
-        self.mod_source.addItem("Modrinth", userData="modrinth")
-        self.mod_source.addItem("CurseForge", userData="curseforge")
-        mod_toolbar.addWidget(self.mod_source)
+        content_toolbar = QHBoxLayout()
+        content_toolbar.setSpacing(10)
 
-        self.mod_search_input = SearchLineEdit(self.mod_tab)
-        self.mod_search_input.setPlaceholderText("输入关键词搜索 Mod...")
-        self.mod_search_input.returnPressed.connect(self._search_mods)
-        mod_toolbar.addWidget(self.mod_search_input, 1)
+        self.content_kind = SegmentedWidget(self.content_tab)
+        self.content_kind.addItem("mod", "模组")
+        self.content_kind.addItem("resourcepack", "资源包")
+        self.content_kind.setCurrentItem("mod")
+        self.content_kind.currentItemChanged.connect(lambda _: self._content_kind_changed())
+        content_toolbar.addWidget(self.content_kind)
 
-        self.mod_search_btn = PrimaryPushButton("搜索", self.mod_tab)
-        self.mod_search_btn.clicked.connect(self._search_mods)
-        mod_toolbar.addWidget(self.mod_search_btn)
-        mod_layout.addLayout(mod_toolbar)
+        self.content_search_input = SearchLineEdit(self.content_tab)
+        self.content_search_input.setPlaceholderText("搜索模组或资源包，例如 sodium")
+        self.content_search_input.returnPressed.connect(self._search_content)
+        content_toolbar.addWidget(self.content_search_input, 1)
 
-        self.mod_status = CaptionLabel("准备就绪", self.mod_tab)
-        mod_layout.addWidget(self.mod_status)
+        self.content_search_btn = PrimaryPushButton("搜索", self.content_tab)
+        self.content_search_btn.setIcon(FluentIcon.SEARCH)
+        self.content_search_btn.clicked.connect(self._search_content)
+        content_toolbar.addWidget(self.content_search_btn)
 
-        self.mod_list = ListWidget(self.mod_tab)
-        mod_layout.addWidget(self.mod_list, 1)
+        self.content_source_combo = ComboBox(self.content_tab)
+        self.content_source_combo.addItem("Modrinth", userData="modrinth")
+        self.content_source_combo.addItem("CurseForge", userData="curseforge")
+        self.content_source_combo.setFixedWidth(140)
+        self.content_source_combo.currentIndexChanged.connect(lambda _: self._content_source_changed())
+        content_toolbar.addWidget(self.content_source_combo)
+        content_layout.addLayout(content_toolbar)
+
+        filter_bar = QHBoxLayout()
+        filter_bar.setSpacing(10)
+
+        game_label = CaptionLabel("游戏版本", self.content_tab)
+        game_label.setTextColor(palette()["secondary"], palette()["secondary"])
+        filter_bar.addWidget(game_label)
+        self.content_game_combo = ComboBox(self.content_tab)
+        self.content_game_combo.setMinimumWidth(170)
+        self.content_game_combo.addItem("未选择已安装版本", userData="")
+        filter_bar.addWidget(self.content_game_combo)
+
+        self.loader_label = CaptionLabel("加载器", self.content_tab)
+        self.loader_label.setTextColor(palette()["secondary"], palette()["secondary"])
+        filter_bar.addWidget(self.loader_label)
+        self.content_loader_combo = ComboBox(self.content_tab)
+        self.content_loader_combo.addItem("Fabric", userData="fabric")
+        self.content_loader_combo.addItem("Forge", userData="forge")
+        self.content_loader_combo.addItem("Quilt", userData="quilt")
+        self.content_loader_combo.addItem("NeoForge", userData="neoforge")
+        filter_bar.addWidget(self.content_loader_combo)
+
+        filter_bar.addStretch(1)
+        self.content_status = CaptionLabel("输入关键词开始搜索", self.content_tab)
+        self.content_status.setTextColor(palette()["secondary"], palette()["secondary"])
+        filter_bar.addWidget(self.content_status)
+        content_layout.addLayout(filter_bar)
+
+        self.content_list = ListWidget(self.content_tab)
+        self.content_list.setSpacing(6)
+        content_layout.addWidget(self.content_list, 1)
 
         # 组装 Tab
         self.tab_widget.addTab(self.version_tab, "游戏版本", icon=FluentIcon.LIBRARY)
-        self.tab_widget.addTab(self.mod_tab, "资源搜索", icon=FluentIcon.SEARCH)
+        self.tab_widget.addTab(self.content_tab, "模组 / 资源包", icon=FluentIcon.ZIP_FOLDER)
         outer.addWidget(self.tab_widget, 1)
 
     # ------------------------------------------------------------------
@@ -288,6 +330,7 @@ class VersionsPage(QWidget):
         self._rows = list(data.get("versions") or [])
         current = self.current_version_id()
         self.model.set_versions(self._rows)
+        self.populate_game_versions(self._rows)
         self._apply_filters()
         self.count_label.setText(f"共 {len(self._rows)} 个版本")
         if current:
@@ -337,6 +380,8 @@ class VersionsPage(QWidget):
         if current.isValid():
             data = current.data(Qt.UserRole) or {}
             self._show_detail(data)
+            if data.get("id"):
+                self.set_content_game_version(str(data["id"]))
         else:
             self._show_detail({})
 
@@ -471,78 +516,201 @@ class VersionsPage(QWidget):
             if current:
                 self.select_version(current)
 
-    def _search_mods(self):
-        query = self.mod_search_input.text().strip()
+    # ------------------------------------------------------------------
+    # 模组 / 资源包
+    # ------------------------------------------------------------------
+    def current_content_kind(self) -> str:
+        return self.content_kind.currentRouteKey() or "mod"
+
+    def _content_kind_changed(self) -> None:
+        is_mod = self.current_content_kind() == "mod"
+        # 资源包与加载器无关，只按游戏版本过滤
+        for widget in (self.loader_label, self.content_loader_combo):
+            widget.setVisible(is_mod)
+        self.content_search_input.setPlaceholderText(
+            "搜索模组，例如 sodium" if is_mod else "搜索资源包，例如 faithful"
+        )
+        self.content_list.clear()
+        self.content_status.setText("输入关键词开始搜索")
+
+    def set_content_game_version(self, version_id: str) -> None:
+        """把当前选中的版本同步到筛选下拉框。"""
+        if not version_id:
+            return
+        index = self.content_game_combo.findData(version_id)
+        if index >= 0:
+            self.content_game_combo.setCurrentIndex(index)
+
+    def populate_game_versions(self, versions: list[dict]) -> None:
+        """游戏版本下拉框只列出已安装的版本。"""
+        current = self.content_game_combo.currentData()
+        self.content_game_combo.blockSignals(True)
+        self.content_game_combo.clear()
+        self.content_game_combo.addItem("未选择已安装版本", userData="")
+        installed = [row for row in versions if row.get("installed")]
+        for row in installed:
+            version_id = str(row.get("id") or "")
+            if version_id:
+                self.content_game_combo.addItem(version_id, userData=version_id)
+        if current:
+            index = self.content_game_combo.findData(current)
+            if index >= 0:
+                self.content_game_combo.setCurrentIndex(index)
+        elif installed:
+            self.content_game_combo.setCurrentIndex(1)
+        self.content_game_combo.blockSignals(False)
+
+    def refresh_content_versions(self) -> None:
+        """安装/卸载版本后刷新资源页的版本下拉框。"""
+        try:
+            data = self.service.versions()
+        except Exception:
+            return
+        self.populate_game_versions(list(data.get("versions") or []))
+
+    def _content_source_changed(self) -> None:
+        source = self.content_source_combo.currentData()
+        if source == "curseforge" and not self.service.curseforge_key():
+            InfoBar.warning(
+                "需要 API Key",
+                "CurseForge 需要在「设置 → 内容源」里填写 API Key 才能搜索。",
+                parent=self,
+                duration=5000,
+            )
+
+    def _resolved_game_version(self) -> str:
+        selected = self.content_game_combo.currentData()
+        return str(selected) if selected else ""
+
+    def _search_content(self) -> None:
+        query = self.content_search_input.text().strip()
         if not query:
             InfoBar.warning("提示", "请输入搜索关键词", parent=self)
             return
 
-        source = self.mod_source.currentData()
-        self.mod_list.clear()
-        self.mod_status.setText(f"正在搜索 {source.capitalize()} …")
+        kind = self.current_content_kind()
+        game_version = self._resolved_game_version() or None
+        loader = None
+        if kind == "mod":
+            loader = self.content_loader_combo.currentData() or None
+        source = self.content_source_combo.currentData() or "modrinth"
 
-        def fetch_data(w):
-            try:
-                if source == "modrinth":
-                    # Modrinth 搜索接口
-                    url = f"https://api.modrinth.com/v2/search?query={urllib.parse.quote(query)}&limit=20"
-                    req = urllib.request.Request(url, headers={"User-Agent": "MCL-Studio/1.0"})
-                else:
-                    # CurseForge 搜索接口（需要 API Key）
-                    api_key = self.service.config.get("curseforge_api_key") or ""
-                    if not api_key:
-                        raise ValueError("请在设置中填写 CurseForge API Key")
+        self.content_list.clear()
+        self.content_status.setText(f"正在搜索 {SOURCE_LABELS.get(source, source)} …")
 
-                    url = (
-                        "https://api.curseforge.com/v1/mods/search"
-                        f"?gameId=432&classId=6&searchFilter={urllib.parse.quote(query)}&pageSize=20"
-                    )
-                    req = urllib.request.Request(
-                        url, headers={"x-api-key": api_key, "Accept": "application/json"}
-                    )
+        worker = Worker(
+            lambda w: self.service.search_content(
+                query,
+                project_type=kind,
+                game_version=game_version,
+                loader=loader,
+                limit=20,
+                source=source,
+            )
+        )
 
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    return json.loads(resp.read().decode())
-            except Exception as e:
-                raise e
-
-        worker = Worker(fetch_data)
-
-        def on_success(data):
-            # 正确解析字段
-            if source == "modrinth":
-                hits = data.get("hits", [])
-            else:
-                hits = data.get("data", [])
-
+        def on_success(data: dict) -> None:
+            hits = data.get("hits") or []
             if not hits:
-                self.mod_status.setText("没有找到相关 Mod，换个关键词试试。")
+                self.content_status.setText("没有找到相关结果，换个关键词试试。")
                 return
+            self.content_status.setText(f"找到 {data.get('total', len(hits))} 个结果（显示前 {len(hits)} 个）")
+            for hit in hits:
+                hit["source"] = source
+                self._append_content_row(hit, kind, game_version, loader)
 
-            self.mod_status.setText(f"搜索完成，找到 {len(hits)} 个结果")
-
-            for item in hits:
-                if source == "modrinth":
-                    title = item.get("title") or item.get("slug") or "未知"
-                    desc = item.get("description") or ""
-                else:
-                    title = item.get("name") or "未知"
-                    desc = item.get("summary") or ""
-
-                # 让标题和描述稍微有点排版
-                text = f"{title}\n{desc[:80]}..." if len(desc) > 80 else f"{title}\n{desc}"
-
-                # 👇 核心修复：使用 QListWidgetItem，并通过 addItem 加入列表
-                list_item = QListWidgetItem(text)
-                list_item.setToolTip(desc)
-                list_item.setData(Qt.UserRole, item)  # 存原始数据
-                self.mod_list.addItem(list_item)
-
-        def on_error(err):
-            # 把错误显示到界面上，方便排查
-            self.mod_status.setText(f"搜索失败：{err}")
-            InfoBar.error("搜索出错", str(err), parent=self)
+        def on_error(message: str) -> None:
+            self.content_status.setText("搜索失败")
+            InfoBar.error("搜索出错", message, parent=self, position=InfoBarPosition.TOP_RIGHT)
 
         worker.signals.result.connect(on_success)
         worker.signals.error.connect(on_error)
+        # 必须持有引用：局部变量在函数返回后会被回收，信号随之断开，
+        # 回调永远不触发，界面会一直停在「正在搜索…」。
+        self._content_worker = worker
         QThreadPool.globalInstance().start(worker)
+
+    def _append_content_row(self, hit: dict, kind: str, game_version: str | None, loader: str | None) -> None:
+        item = QListWidgetItem()
+        widget = self._build_content_item(hit, kind, game_version, loader)
+        item.setSizeHint(widget.sizeHint())
+        self.content_list.addItem(item)
+        self.content_list.setItemWidget(item, widget)
+
+    def _build_content_item(self, hit: dict, kind: str, game_version: str | None, loader: str | None) -> QWidget:
+        row = QWidget(self.content_list)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(14, 10, 12, 10)
+        layout.setSpacing(12)
+
+        icon = IconWidget(FluentIcon.ZIP_FOLDER if kind == "resourcepack" else FluentIcon.APPLICATION, row)
+        icon.setFixedSize(22, 22)
+        layout.addWidget(icon, 0, Qt.AlignTop)
+
+        texts = QVBoxLayout()
+        texts.setSpacing(2)
+        title = StrongBodyLabel(hit.get("title") or hit.get("slug") or "未知", row)
+        texts.addWidget(title)
+        desc = CaptionLabel(hit.get("description") or "", row)
+        desc.setWordWrap(True)
+        desc.setTextColor(palette()["secondary"], palette()["secondary"])
+        texts.addWidget(desc)
+        source_label = SOURCE_LABELS.get(str(hit.get("source") or ""), "")
+        meta = CaptionLabel(
+            f"作者 {hit.get('author') or '未知'} · 下载 {int(hit.get('downloads') or 0):,}"
+            + (f" · {source_label}" if source_label else ""),
+            row,
+        )
+        meta.setTextColor(palette()["tertiary"], palette()["tertiary"])
+        texts.addWidget(meta)
+        layout.addLayout(texts, 1)
+
+        install_button = PrimaryPushButton("安装", row)
+        install_button.setIcon(FluentIcon.DOWNLOAD)
+        install_button.setFixedWidth(96)
+        install_button.clicked.connect(
+            lambda: self._choose_and_install(hit, kind, game_version, loader, install_button)
+        )
+        layout.addWidget(install_button, 0, Qt.AlignVCenter)
+
+        return row
+
+    def _choose_and_install(
+        self,
+        hit: dict,
+        kind: str,
+        game_version: str | None,
+        loader: str | None,
+        button,
+    ) -> None:
+        """弹出版本表，选好后把下载任务交给任务管理页。"""
+        if not game_version:
+            InfoBar.warning(
+                "先选择版本",
+                "请在上方「游戏版本」里选择一个已安装的版本，模组才能装到正确位置。",
+                parent=self,
+                duration=5000,
+            )
+            return
+
+        from ..dialogs import VersionPickerDialog
+
+        dialog = VersionPickerDialog(hit, game_version, loader, self.service, self.window())
+        if not dialog.exec():
+            return
+        chosen = dialog.selected_version
+        if not chosen:
+            return
+
+        button.setEnabled(False)
+        button.setText("已加入任务")
+        self.contentRequested.emit(
+            {
+                "project": hit,
+                "kind": kind,
+                "game_version": game_version,
+                "loader": loader,
+                "chosen": chosen,
+                "version_id": self._resolved_game_version() or None,
+            }
+        )

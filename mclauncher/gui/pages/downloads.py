@@ -28,7 +28,7 @@ from ..widgets import EmptyState
 class TaskCard(SimpleCardWidget):
     cancelRequested = Signal(str)
 
-    def __init__(self, task_id: str, version_id: str, parent=None):
+    def __init__(self, task_id: str, version_id: str, parent=None, title: str | None = None):
         super().__init__(parent)
         self.task_id = task_id
         self.version_id = version_id
@@ -43,7 +43,7 @@ class TaskCard(SimpleCardWidget):
         icon = IconWidget(FluentIcon.DOWNLOAD, self)
         icon.setFixedSize(20, 20)
         top.addWidget(icon)
-        self.title_label = StrongBodyLabel(f"Minecraft {version_id}", self)
+        self.title_label = StrongBodyLabel(title or f"Minecraft {version_id}", self)
         top.addWidget(self.title_label)
         self.status_label = CaptionLabel("准备中…", self)
         self.status_label.setTextColor(palette()["secondary"], palette()["secondary"])
@@ -209,15 +209,15 @@ class DownloadsPage(QWidget):
         outer.addWidget(self.log)
 
     # ------------------------------------------------------------------
-    def add_task(self, task_id: str, version_id: str) -> TaskCard:
-        card = TaskCard(task_id, version_id, self.scroll.widget())
+    def add_task(self, task_id: str, version_id: str, title: str | None = None) -> TaskCard:
+        card = TaskCard(task_id, version_id, self.scroll.widget(), title=title)
         card.cancelRequested.connect(self.cancelRequested.emit)
         self._cards[task_id] = card
         if self.empty.isVisible() or self.empty.parent() is not None:
             self.empty.hide()
         self.cards_layout.insertWidget(self.cards_layout.count() - 1, card)
         self.log.clear()
-        self.append_log(f"[*] 创建安装任务：Minecraft {version_id}")
+        self.append_log(f"[*] 创建任务：{title or f'Minecraft {version_id}'}")
         return card
 
     def card(self, task_id: str) -> TaskCard | None:

@@ -187,6 +187,39 @@ class SettingsPage(QWidget):
         paths.addSettingCard(self.offline_card)
 
         content.addWidget(paths)
+
+        # ================= 内容源 =================
+        sources = SettingCardGroup("模组与资源包", container)
+
+        self.content_source_card = SettingCard(
+            FluentIcon.ZIP_FOLDER,
+            "默认内容源",
+            "下载页搜索模组/资源包时优先使用的站点。",
+            sources,
+        )
+        self.content_source_combo = ComboBox(self.content_source_card)
+        self.content_source_combo.addItem("Modrinth", userData="modrinth")
+        self.content_source_combo.addItem("CurseForge", userData="curseforge")
+        self.content_source_combo.setFixedWidth(160)
+        self.content_source_card.hBoxLayout.addWidget(self.content_source_combo, 0, Qt.AlignRight)
+        self.content_source_card.hBoxLayout.addSpacing(14)
+        sources.addSettingCard(self.content_source_card)
+
+        self.cf_key_card = SettingCard(
+            FluentIcon.SEARCH,
+            "CurseForge API Key",
+            "CurseForge 搜索必须提供 Key，可在 console.curseforge.com 免费申请。",
+            sources,
+        )
+        self.cf_key_input = LineEdit(self.cf_key_card)
+        self.cf_key_input.setPlaceholderText("粘贴 API Key（留空则只用 Modrinth）")
+        self.cf_key_input.setMinimumWidth(300)
+        self.cf_key_input.setEchoMode(LineEdit.Password)
+        self.cf_key_card.hBoxLayout.addWidget(self.cf_key_input, 0, Qt.AlignRight)
+        self.cf_key_card.hBoxLayout.addSpacing(14)
+        sources.addSettingCard(self.cf_key_card)
+
+        content.addWidget(sources)
         content.addStretch(1)
 
         scroll.setWidget(container)
@@ -222,6 +255,8 @@ class SettingsPage(QWidget):
             "game_dir": self.game_dir_input.text().strip(),  # 👈 读取输入框
             "offline_name": self.offline_input.text().strip(),
             "isolate_versions": self.isolate_switch.isChecked(),
+            "content_source": self.content_source_combo.currentData(),
+            "curseforge_api_key": self.cf_key_input.text().strip(),
         }
         self.saveRequested.emit(values)
 
@@ -240,6 +275,11 @@ class SettingsPage(QWidget):
         self.game_dir_input.setText(str(settings.get("game_dir") or ""))  # 👈 设置输入框
         self.config_dir_label.setText(str(settings.get("config_dir") or ""))
         self.offline_input.setText(str(settings.get("offline_name") or "Player"))
+
+        # 内容源
+        index = self.content_source_combo.findData(settings.get("content_source") or "modrinth")
+        self.content_source_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.cf_key_input.setText(str(settings.get("curseforge_api_key") or ""))
 
         configured = str(settings.get("java_path") or "")
         if not self._javas_loaded and self._java_worker is None:

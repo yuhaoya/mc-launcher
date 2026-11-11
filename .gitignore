@@ -3,6 +3,10 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+.build-*/
+dist-win7/
+dist-win7dir/
+dist-diag/
 .venv/
 venv/
 venv_win7/
@@ -27,7 +31,16 @@ venv_win7/
 .wheels/
 .ui-demo/
 .ui-demo-config/
-.ui-light-config/
+.ui-shot/
+.ui-shot-cfg/
+.ui-net-test/
+.ui-net-config/
+.ui-tui-test/
+.ui-tui-cfg/
+Thumbs.db
+*.pyc38
+win7-*.png
+win7-*.txt
 
 # 本地缓存的版本清单（运行时会自动重新下载）
 mcl/cache/

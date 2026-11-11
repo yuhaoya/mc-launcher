@@ -26,6 +26,8 @@ from textual.widgets import (
 
 from ..services import LauncherService
 
+RELEASE_LABELS = {"release": "正式版", "beta": "测试版", "alpha": "内测版"}
+
 CSS = """
 Screen {
     background: #0d1117;
@@ -155,10 +157,11 @@ class MCLTuiApp(App):
         ("r", "refresh", "刷新"),
         ("1", "tab('dashboard')", "仪表盘"),
         ("2", "tab('versions')", "版本"),
-        ("3", "tab('downloads')", "下载"),
-        ("4", "tab('instances')", "实例"),
-        ("5", "tab('account')", "账号"),
-        ("6", "tab('settings')", "设置"),
+        ("3", "tab('content')", "模组"),
+        ("4", "tab('downloads')", "下载"),
+        ("5", "tab('instances')", "实例"),
+        ("6", "tab('account')", "账号"),
+        ("7", "tab('settings')", "设置"),
     ]
 
     def __init__(self, game_dir: str | Path | None = None, config_dir: str | Path | None = None):
@@ -173,6 +176,9 @@ class MCLTuiApp(App):
         self._game_worker = None
         self._login_cancel: threading.Event | None = None
         self._versions_ready = False
+        self._content_hits: list[dict[str, Any]] = []
+        self._content_files: list[dict[str, Any]] = []
+        self._content_installing = False
 
     # ------------------------------------------------------------------
     def compose(self) -> ComposeResult:
@@ -209,6 +215,40 @@ class MCLTuiApp(App):
                     yield Button("卸载", id="versions-uninstall", variant="error")
                 yield DataTable(id="versions-table")
                 yield Static("正在加载版本清单…", id="versions-status")
+            with TabPane("模组", id="content"):
+                yield Static("模组与资源包下载", classes="section")
+                with Horizontal():
+                    yield Select(
+                        [("模组", "mod"), ("资源包", "resourcepack")],
+                        id="content-kind",
+                        value="mod",
+                        allow_blank=False,
+                    )
+                    yield Select(
+                        [("Modrinth", "modrinth"), ("CurseForge", "curseforge")],
+                        id="content-source",
+                        value="modrinth",
+                        allow_blank=False,
+                    )
+                    yield Input(placeholder="搜索关键词，例如 sodium", id="content-search")
+                    yield Button("搜索", id="content-search-btn", variant="primary")
+                with Horizontal():
+                    yield Label("已安装版本")
+                    yield Select([], id="content-game", prompt="选择已安装版本")
+                    yield Label("加载器")
+                    yield Select(
+                        [("Fabric", "fabric"), ("Forge", "forge"), ("Quilt", "quilt"), ("NeoForge", "neoforge")],
+                        id="content-loader",
+                        value="fabric",
+                        allow_blank=False,
+                    )
+                yield Static("输入关键词后回车搜索。", id="content-status")
+                yield DataTable(id="content-table")
+                yield Static("可用文件（第一行为推荐版本）", classes="section")
+                yield DataTable(id="content-files")
+                with Horizontal():
+                    yield Button("安装选中文件", id="content-install", variant="primary")
+                    yield Button("打开内容目录", id="content-open")
             with TabPane("下载", id="downloads"):
                 yield Static("下载与安装", classes="section")
                 yield Static("当前没有安装任务。", id="download-status")
@@ -280,6 +320,12 @@ class MCLTuiApp(App):
         accounts_table = self.query_one("#accounts-table", DataTable)
         accounts_table.cursor_type = "row"
         accounts_table.add_columns("玩家名", "类型", "UUID", "状态")
+        content_table = self.query_one("#content-table", DataTable)
+        content_table.cursor_type = "row"
+        content_table.add_columns("名称", "作者", "下载量", "项目 ID")
+        files_table = self.query_one("#content-files", DataTable)
+        files_table.cursor_type = "row"
+        files_table.add_columns("版本", "类型", "游戏版本", "发布时间")
         self.refresh_dashboard()
         self.load_settings()
         self.refresh_instances()
@@ -413,6 +459,7 @@ class MCLTuiApp(App):
         self._versions_ready = True
         self._all_versions = list(data.get("versions") or [])
         self._populate_versions()
+        self._populate_content_versions()
         self.query_one("#versions-status", Static).update(
             f"共 {len(self._all_versions)} 个版本；回车选择，安装会自动补齐依赖与 Java。"
         )
@@ -718,6 +765,7 @@ class MCLTuiApp(App):
             self.refresh_dashboard()
             self.refresh_instances()
             self._populate_versions()
+            self._populate_content_versions()
             self.notify(
                 f"已卸载 {version_id}，释放 {result.get('freed_text') or '0 B'}",
                 severity="information",
@@ -731,6 +779,245 @@ class MCLTuiApp(App):
             ),
             handle,
         )
+
+    # ------------------------------------------------------------------
+    # 模组 / 资源包
+    # ------------------------------------------------------------------
+    def _content_kind(self) -> str:
+        value = self.query_one("#content-kind", Select).value
+        return "resourcepack" if value == "resourcepack" else "mod"
+
+    def _content_game_version(self) -> str | None:
+        value = self.query_one("#content-game", Select).value
+        if value is Select.BLANK:
+            return None
+        return str(value)
+
+    def _content_source(self) -> str:
+        value = self.query_one("#content-source", Select).value
+        return "curseforge" if value == "curseforge" else "modrinth"
+
+    def _content_loader(self) -> str | None:
+        if self._content_kind() != "mod":
+            return None
+        value = self.query_one("#content-loader", Select).value
+        return None if value is Select.BLANK else str(value)
+
+    def _populate_content_versions(self) -> None:
+        """内容页的游戏版本下拉框只列已安装版本。"""
+        select = self.query_one("#content-game", Select)
+        options = [
+            (row["id"], row["id"])
+            for row in self._all_versions
+            if row.get("installed") or row["id"] in self._installed_ids
+        ]
+        current = select.value if select.value is not Select.BLANK else None
+        select.set_options(options)
+        if current and any(value == current for _, value in options):
+            select.value = current
+        elif options:
+            select.value = options[0][1]
+
+    @work(thread=True, exclusive=True, group="content-search")
+    def search_content_worker(self, query: str, kind: str, game_version: str | None, loader: str | None, source: str) -> None:
+        try:
+            data = self.service.search_content(
+                query,
+                project_type=kind,
+                game_version=game_version,
+                loader=loader,
+                limit=30,
+                source=source,
+            )
+        except Exception as exc:
+            self.call_from_thread(self._content_search_failed, str(exc))
+        else:
+            self.call_from_thread(self._content_search_done, data, source)
+
+    def _content_search_failed(self, message: str) -> None:
+        self.query_one("#content-status", Static).update(f"[#f85149]搜索失败：{message}[/]")
+        self.notify(f"搜索失败：{message}", severity="error")
+
+    def _content_search_done(self, data: dict, source: str) -> None:
+        self._content_hits = list(data.get("hits") or [])
+        for hit in self._content_hits:
+            hit["source"] = source
+        table = self.query_one("#content-table", DataTable)
+        table.clear()
+        for hit in self._content_hits:
+            table.add_row(
+                hit.get("title") or hit.get("slug") or "未知",
+                hit.get("author") or "-",
+                f"{int(hit.get('downloads') or 0):,}",
+                str(hit.get("id") or ""),
+                key=str(hit.get("id") or hit.get("slug") or ""),
+            )
+        kind_label = "资源包" if self._content_kind() == "resourcepack" else "模组"
+        self.query_one("#content-status", Static).update(
+            f"共 {data.get('total', len(self._content_hits))} 个{kind_label}，显示前 {len(self._content_hits)} 个。"
+            "选中一行查看可用文件。"
+        )
+
+    def _search_content(self) -> None:
+        query = self.query_one("#content-search", Input).value.strip()
+        if not query:
+            self.notify("请输入搜索关键词", severity="warning")
+            return
+        kind = self._content_kind()
+        source = self._content_source()
+        if source == "curseforge" and not self.service.curseforge_key():
+            self.notify("CurseForge 需要先在设置里填写 API Key", severity="warning")
+            return
+        game_version = self._content_game_version()
+        if not game_version:
+            self.notify("请先在「已安装版本」里选择一个版本", severity="warning")
+            return
+        self.query_one("#content-status", Static).update(f"正在搜索 {source} …")
+        self.search_content_worker(query, kind, game_version, self._content_loader(), source)
+
+    def _selected_content(self) -> dict[str, Any] | None:
+        table = self.query_one("#content-table", DataTable)
+        if table.cursor_row < 0:
+            return None
+        try:
+            row = table.get_row_at(table.cursor_row)
+        except Exception:
+            return None
+        if not row:
+            return None
+        project_id = str(row[3])
+        return next((h for h in getattr(self, "_content_hits", []) if str(h.get("id")) == project_id), None)
+
+    @work(thread=True, exclusive=True, group="content-files")
+    def load_content_files(self, hit: dict, kind: str, game_version: str | None, loader: str | None, source: str) -> None:
+        try:
+            versions = self.service.content_versions(
+                str(hit.get("id")),
+                project_type=kind,
+                game_version=game_version,
+                loader=loader,
+                source=source,
+            )
+        except Exception as exc:
+            self.call_from_thread(self.notify, f"读取文件列表失败：{exc}", severity="error")
+        else:
+            self.call_from_thread(self._content_files_loaded, versions)
+
+    def _content_files_loaded(self, versions: list[dict[str, Any]]) -> None:
+        self._content_files = versions
+        table = self.query_one("#content-files", DataTable)
+        table.clear()
+        for index, version in enumerate(versions):
+            label = str(version.get("name") or version.get("version_number") or "")
+            if version.get("recommended"):
+                label = f"★ {label}"
+            table.add_row(
+                label,
+                RELEASE_LABELS.get(str(version.get("release_type")), "正式版"),
+                ", ".join(version.get("game_versions") or []) or "—",
+                str(version.get("date_published") or "")[:10] or "—",
+                key=str(index),
+            )
+        if versions:
+            table.move_cursor(row=0)
+            self.query_one("#content-status", Static).update(
+                f"共 {len(versions)} 个文件，第一行为推荐版本；选中后点「安装选中文件」。"
+            )
+        else:
+            self.query_one("#content-status", Static).update("没有匹配的文件，换个版本或加载器试试。")
+
+    @work(thread=True, exclusive=True, group="content-install")
+    def install_content_worker(
+        self,
+        hit: dict,
+        kind: str,
+        game_version: str | None,
+        loader: str | None,
+        chosen: dict[str, Any],
+        source: str,
+    ) -> None:
+        title = hit.get("title") or hit.get("id")
+        self.call_from_thread(
+            self.query_one("#content-status", Static).update,
+            f"正在安装 {title} …",
+        )
+        self.call_from_thread(self._content_task_started, title, kind)
+        try:
+            result = self.service.install_content(
+                str(hit.get("id")),
+                project_type=kind,
+                game_version=game_version,
+                loader=loader,
+                version_id=self._content_game_version(),
+                chosen_version=chosen,
+                source=source,
+                log_callback=lambda m: self.call_from_thread(self._content_task_log, m),
+                callback=lambda e: self.call_from_thread(self._content_task_progress, e),
+            )
+        except Exception as exc:
+            self.call_from_thread(self._content_install_failed, title, str(exc))
+        else:
+            self.call_from_thread(self._content_install_done, title, result)
+
+    def _content_task_started(self, title: str, kind: str) -> None:
+        self._content_installing = True
+        self.query_one("#download-cancel", Button).disabled = False
+        kind_label = "资源包" if kind == "resourcepack" else "模组"
+        self.query_one("#download-status", Static).update(f"正在安装{kind_label}：{title}")
+        log = self.query_one("#download-log", RichLog)
+        log.write(f"[bold #58a6ff]开始安装{kind_label}[/] {title}")
+
+    def _content_task_progress(self, event: dict) -> None:
+        bar = self.query_one("#download-progress", ProgressBar)
+        bar.update(progress=float(event.get("percent") or 0))
+
+    def _content_task_log(self, message: str) -> None:
+        self.query_one("#download-log", RichLog).write(message)
+
+    def _content_install_done(self, title: str, result: dict) -> None:
+        self._content_installing = False
+        self.query_one("#download-cancel", Button).disabled = True
+        files = len(result.get("files") or [])
+        self.query_one("#download-status", Static).update(
+            f"[#3fb950]{title} 安装完成，共 {files} 个文件[/]"
+        )
+        self.query_one("#content-status", Static).update(f"[#3fb950]{title} 安装完成（{files} 个文件）[/]")
+        self.notify(f"{title} 已安装到 {result.get('dir')}", severity="information")
+
+    def _content_install_failed(self, title: str, message: str) -> None:
+        self._content_installing = False
+        self.query_one("#download-cancel", Button).disabled = True
+        self.query_one("#download-status", Static).update(f"[#f85149]{title} 安装失败：{message}[/]")
+        self.query_one("#content-status", Static).update(f"[#f85149]安装失败：{message}[/]")
+        self.notify(f"安装失败：{message}", severity="error")
+
+    def _install_selected_content(self) -> None:
+        hit = self._selected_content()
+        if not hit:
+            self.notify("请先在搜索结果中选择一个项目", severity="warning")
+            return
+        files = getattr(self, "_content_files", [])
+        table = self.query_one("#content-files", DataTable)
+        if not files or table.cursor_row < 0:
+            self.notify("请先在下方文件列表中选择一个版本", severity="warning")
+            return
+        if table.cursor_row >= len(files):
+            return
+        chosen = files[table.cursor_row]
+        self.install_content_worker(
+            hit,
+            self._content_kind(),
+            self._content_game_version(),
+            self._content_loader(),
+            chosen,
+            self._content_source(),
+        )
+
+    def _open_content_dir(self) -> None:
+        kind = self._content_kind()
+        path = self.service.content_dir(kind, self._content_game_version())
+        path.mkdir(parents=True, exist_ok=True)
+        self.notify(f"内容目录：{path}", severity="information")
 
     # ------------------------------------------------------------------
     def action_tab(self, pane_id: str) -> None:
@@ -764,6 +1051,12 @@ class MCLTuiApp(App):
                 self._install(version_id)
         elif button_id == "versions-uninstall":
             self._uninstall(self._selected_version_id())
+        elif button_id == "content-search-btn":
+            self._search_content()
+        elif button_id == "content-install":
+            self._install_selected_content()
+        elif button_id == "content-open":
+            self._open_content_dir()
         elif button_id == "instance-refresh":
             self.refresh_instances()
         elif button_id == "instance-open":
@@ -794,27 +1087,53 @@ class MCLTuiApp(App):
         elif button_id == "reload-settings":
             self.load_settings()
 
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "version-search":
+            self._populate_versions()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "content-search":
+            self._search_content()
+
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "dash-version" and event.value is not Select.BLANK:
             self._dash_version = str(event.value)
         elif event.select.id == "version-filter":
             self._populate_versions()
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id == "version-search":
-            self._populate_versions()
+        elif event.select.id == "content-kind":
+            is_mod = self._content_kind() == "mod"
+            self.query_one("#content-loader", Select).disabled = not is_mod
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.data_table.id == "versions-table":
             row = event.data_table.get_row_at(event.cursor_row)
             if row:
                 self._selected_version = str(row[0])
+        elif event.data_table.id == "content-table":
+            self._load_files_for_selected()
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.data_table.id == "versions-table":
             row = event.data_table.get_row_at(event.cursor_row)
             if row:
                 self._selected_version = str(row[0])
+        elif event.data_table.id == "content-table":
+            self._load_files_for_selected()
+
+    def _load_files_for_selected(self) -> None:
+        hit = self._selected_content()
+        if not hit:
+            return
+        game_version = self._content_game_version()
+        if not game_version:
+            return
+        self.load_content_files(
+            hit,
+            self._content_kind(),
+            game_version,
+            self._content_loader(),
+            self._content_source(),
+        )
 
 
 def main(game_dir: str | Path | None = None, config_dir: str | Path | None = None) -> int:

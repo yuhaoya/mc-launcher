@@ -66,6 +66,8 @@ class LauncherService:
             "accent": self.config.get("accent") or "blue",
             "isolate_versions": bool(self.config.get("isolate_versions") or False),
             "mirror_source": self.config.get("mirror_source") or "official",
+            "content_source": self.config.get("content_source") or "modrinth",
+            "curseforge_api_key": self.config.get("curseforge_api_key") or "",
         }
 
     def save_settings(self, values: dict[str, Any]) -> dict[str, Any]:
@@ -93,6 +95,12 @@ class LauncherService:
             self.config.set("isolate_versions", bool(values["isolate_versions"]))
         if "mirror_source" in values:
             self.config.set("mirror_source", values["mirror_source"])
+        if "content_source" in values:
+            source = str(values["content_source"] or "modrinth")
+            self.config.set("content_source", source if source in ("modrinth", "curseforge") else "modrinth")
+        if "curseforge_api_key" in values:
+            key = str(values["curseforge_api_key"] or "").strip()
+            self.config.set("curseforge_api_key", key or None)
         self.config.save()
         return self.settings()
 
@@ -361,6 +369,122 @@ class LauncherService:
             "versions": versions,
             "fetched_at": time.time(),
         }
+
+    # ------------------------------------------------------------------
+    # content (模组 / 资源包)
+    # ------------------------------------------------------------------
+    def content_dir(self, project_type: str = "mod", version_id: str | None = None) -> Path:
+        """内容安装目录，遵循版本隔离设置。"""
+        subdir = "resourcepacks" if project_type == "resourcepack" else "mods"
+        if version_id:
+            isolate = self.get_instance_settings(version_id).get("isolate_versions")
+            if isolate is None:
+                isolate = bool(self.settings().get("isolate_versions"))
+            if isolate:
+                return self.paths.instance_subdir(version_id, subdir)
+        return self.paths.game_dir / subdir
+
+    def content_source(self) -> str:
+        return str(self.config.get("content_source") or "modrinth")
+
+    def curseforge_key(self) -> str:
+        return str(self.config.get("curseforge_api_key") or "")
+
+    def search_content(
+        self,
+        query: str,
+        project_type: str = "mod",
+        game_version: str | None = None,
+        loader: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+        source: str | None = None,
+    ) -> dict[str, Any]:
+        from . import content
+
+        return content.search(
+            query,
+            project_type=project_type,
+            game_version=game_version,
+            loader=loader,
+            limit=limit,
+            offset=offset,
+            source=source or self.content_source(),
+            api_key=self.curseforge_key(),
+        )
+
+    def content_versions(
+        self,
+        project_id: str,
+        project_type: str = "mod",
+        game_version: str | None = None,
+        loader: str | None = None,
+        source: str | None = None,
+    ) -> list[dict[str, Any]]:
+        from . import content
+
+        return content.project_versions(
+            project_id,
+            game_version=game_version,
+            loader=loader,
+            source=source or self.content_source(),
+            api_key=self.curseforge_key(),
+        )
+
+    def install_content(
+        self,
+        project_id: str,
+        project_type: str = "mod",
+        game_version: str | None = None,
+        loader: str | None = None,
+        version_id: str | None = None,
+        with_dependencies: bool = True,
+        log_callback: LogCallback | None = None,
+        callback: ProgressCallback | None = None,
+        source: str | None = None,
+        chosen_version: dict[str, Any] | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> dict[str, Any]:
+        from . import content
+
+        dest = self.content_dir(project_type, version_id)
+        return content.install(
+            project_id,
+            dest,
+            project_type=project_type,
+            game_version=game_version,
+            loader=loader,
+            with_dependencies=with_dependencies,
+            log=log_callback,
+            progress=callback,
+            source=source or self.content_source(),
+            api_key=self.curseforge_key(),
+            chosen_version=chosen_version,
+            cancel_event=cancel_event,
+        )
+
+    def installed_content(self, project_type: str = "mod", version_id: str | None = None) -> list[dict[str, Any]]:
+        directory = self.content_dir(project_type, version_id)
+        if not directory.is_dir():
+            return []
+        pattern = "*.zip" if project_type == "resourcepack" else "*.jar"
+        items = []
+        for path in sorted(directory.glob(pattern)):
+            if not path.is_file():
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            items.append(
+                {
+                    "name": path.name,
+                    "path": str(path),
+                    "size": stat.st_size,
+                    "size_text": human_size(stat.st_size),
+                }
+            )
+        return items
 
     def installed_versions(self) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []

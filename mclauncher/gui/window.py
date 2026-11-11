@@ -71,6 +71,7 @@ class MainWindow(FluentWindow):
         self.versions_page.launchRequested.connect(self._launch)
         self.versions_page.openFolderRequested.connect(self._open_version_folder)
         self.versions_page.uninstallRequested.connect(self._uninstall_version)
+        self.versions_page.contentRequested.connect(self._start_content_install)
 
         self.downloads_page.cancelRequested.connect(self._cancel_install)
 
@@ -175,6 +176,7 @@ class MainWindow(FluentWindow):
         self._install_task = None
         self.home_page.refresh()
         self.versions_page.refresh_installed()
+        self.versions_page.refresh_content_versions()
         InfoBar.success(
             "安装完成",
             f"Minecraft {data.get('id')} 已准备好，可以启动。",
@@ -205,6 +207,72 @@ class MainWindow(FluentWindow):
                 card.status_label.setText("正在取消…")
                 card.cancel_button.setEnabled(False)
             InfoBar.info("正在取消", "当前文件下载完成后会停止。", parent=self)
+
+    # ------------------------------------------------------------------
+    # 模组 / 资源包安装任务
+    # ------------------------------------------------------------------
+    def _start_content_install(self, payload: dict) -> None:
+        import uuid as _uuid
+
+        project = payload.get("project") or {}
+        kind = payload.get("kind") or "mod"
+        title = project.get("title") or project.get("slug") or "内容"
+        type_label = "资源包" if kind == "resourcepack" else "模组"
+        display = f"{title}（{type_label}）"
+
+        task_id = _uuid.uuid4().hex[:8]
+        cancel_event = threading.Event()
+        card = self.downloads_page.add_task(task_id, title, title=display)
+        self.switchTo(self.downloads_page)
+
+        worker = Worker(
+            lambda w: self.service.install_content(
+                str(project.get("id") or ""),
+                project_type=kind,
+                game_version=payload.get("game_version"),
+                loader=payload.get("loader"),
+                version_id=payload.get("version_id"),
+                chosen_version=payload.get("chosen"),
+                log_callback=w.signals.log.emit,
+                callback=w.signals.progress.emit,
+                cancel_event=cancel_event,
+            )
+        )
+        self._workers.add(worker)
+
+        state = {"id": task_id, "cancel": cancel_event, "worker": worker, "card": card, "title": display}
+        self._content_tasks = getattr(self, "_content_tasks", {})
+        self._content_tasks[task_id] = state
+
+        worker.signals.progress.connect(lambda event: self.downloads_page.update_progress(task_id, event))
+        worker.signals.log.connect(self.downloads_page.append_log)
+        worker.signals.result.connect(lambda result: self._content_finished(task_id, display, result))
+        worker.signals.error.connect(lambda message: self._content_failed(task_id, display, message))
+        worker.signals.finished.connect(lambda: self._workers.discard(worker))
+        QThreadPool.globalInstance().start(worker)
+
+    def _content_finished(self, task_id: str, title: str, result: dict) -> None:
+        self.downloads_page.finish_task(task_id, True, "安装完成")
+        tasks = getattr(self, "_content_tasks", {})
+        tasks.pop(task_id, None)
+        files = result.get("files") or []
+        InfoBar.success(
+            "安装完成",
+            f"{title} 已安装 {len(files)} 个文件到 {result.get('dir', '')}",
+            parent=self,
+            duration=3000,
+            position=InfoBarPosition.TOP_RIGHT,
+        )
+
+    def _content_failed(self, task_id: str, title: str, message: str) -> None:
+        tasks = getattr(self, "_content_tasks", {})
+        state = tasks.pop(task_id, None)
+        cancelled = bool(state and state["cancel"].is_set()) or "取消" in message
+        self.downloads_page.finish_task(task_id, False, "已取消" if cancelled else message)
+        if cancelled:
+            InfoBar.warning("已取消", f"{title} 未安装完成。", parent=self)
+        else:
+            InfoBar.error("安装失败", message, parent=self, duration=5000)
 
     # ------------------------------------------------------------------
     def _launch(self, version_id: str) -> None:
@@ -340,6 +408,7 @@ class MainWindow(FluentWindow):
             return
         self._refresh_all()
         self.versions_page.refresh_installed()
+        self.versions_page.refresh_content_versions()
         self.instances_page.refresh()
         InfoBar.success(
             "已卸载",

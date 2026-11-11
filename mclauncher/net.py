@@ -23,7 +23,68 @@ from .progress import Progress
 from .util import ensure_dir, file_matches
 
 USER_AGENT = f"mclauncher/{__version__} (Python {sys.version_info.major}.{sys.version_info.minor})"
-_SSL_CONTEXT = ssl.create_default_context()
+
+
+def _bundled_ca_file() -> Path | None:
+    """随应用分发的 CA 证书包。
+
+    老系统（尤其是停止更新的 Windows 7）根证书库缺少 2017 年后签发的根证书，
+    例如 Mojang 现在用 "Microsoft RSA Root Certificate Authority 2017"，
+    直接校验会失败。这里优先使用内置的 CA 包，找不到才退回系统证书库。
+    """
+    candidates = [
+        Path(__file__).with_name("assets") / "cacert.pem",
+        Path(sys._MEIPASS) / "mclauncher" / "assets" / "cacert.pem" if hasattr(sys, "_MEIPASS") else None,
+    ]
+    for candidate in candidates:
+        if candidate is not None and candidate.is_file():
+            return candidate
+    return None
+
+
+def _make_ssl_context() -> ssl.SSLContext:
+    """构造 SSL 上下文。
+
+    内置 CA 包 + 系统根证书库合并加载：
+    - 内置包带来 2017 年后的新根证书（Mojang/Microsoft 在用）
+    - 系统库覆盖企业代理、杀毒软件注入的私有根证书
+    两者各缺一半，合并后覆盖面最广。
+
+    应急开关：``MCL_INSECURE_TLS=1`` 或命令行 ``--insecure-tls``
+    会关闭证书校验，用于代理无法绕过的情况（会显著降低安全性）。
+    """
+    context = ssl.create_default_context()
+    ca_file = _bundled_ca_file()
+    if ca_file is not None:
+        try:
+            context.load_verify_locations(cafile=str(ca_file))
+        except (ssl.SSLError, OSError):
+            pass
+
+    # 老系统可能需要放宽到 TLS1.2（Mojang 已不支持更低版本）
+    try:
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+    except (AttributeError, ValueError):
+        pass
+
+    if os.environ.get("MCL_INSECURE_TLS") == "1":
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+
+    return context
+
+
+_SSL_CONTEXT: ssl.SSLContext | None = None
+
+
+def ssl_context() -> ssl.SSLContext:
+    """延迟创建 SSL 上下文，允许调用方先设置 ``MCL_INSECURE_TLS``。"""
+    global _SSL_CONTEXT
+    if _SSL_CONTEXT is None:
+        _SSL_CONTEXT = _make_ssl_context()
+    return _SSL_CONTEXT
+
+
 _JSON_HEADERS = {"Accept": "application/json", "Content-Type": "application/json"}
 
 
@@ -44,7 +105,7 @@ def _open(url: str, data: bytes | None = None, headers: dict[str, str] | None = 
     if headers:
         merged.update({k: v for k, v in headers.items() if v is not None})
     request = urllib.request.Request(url, data=data, headers=merged, method="POST" if data is not None else "GET")
-    return urllib.request.urlopen(request, timeout=timeout, context=_SSL_CONTEXT)
+    return urllib.request.urlopen(request, timeout=timeout, context=ssl_context())
 
 
 def _http_error_detail(exc: urllib.error.HTTPError) -> str:
@@ -53,6 +114,26 @@ def _http_error_detail(exc: urllib.error.HTTPError) -> str:
     except Exception:
         body = ""
     return f"HTTP {exc.code} {exc.reason}" + (f": {body[:300]}" if body.strip() else "")
+
+
+def _describe_error(exc: Exception) -> str:
+    """把底层异常翻译成可操作的提示（尤其是老系统上的 TLS 问题）。"""
+    text = str(exc)
+    cause = getattr(exc, "reason", None)
+    if isinstance(cause, ssl.SSLCertVerificationError) or "CERTIFICATE_VERIFY_FAILED" in text:
+        return (
+            "HTTPS 证书校验失败：系统根证书可能过旧（Windows 7 常见），"
+            "或网络中的代理/杀毒软件正在替换证书。"
+            "启动器已内置新版 CA 证书包，请确认程序目录完整；"
+            "若仍失败，请检查系统时间、代理设置或关闭 HTTPS 扫描后重试。"
+        )
+    if isinstance(cause, ssl.SSLError) or "SSL" in text:
+        return f"TLS 握手失败（{text}）。可能是网络代理或系统加密组件过旧。"
+    if "getaddrinfo" in text or "Name or service not known" in text:
+        return "域名解析失败，请检查网络连接或 DNS 设置。"
+    if isinstance(cause, (TimeoutError,)) or "timed out" in text:
+        return "连接超时，请检查网络或代理设置。"
+    return text
 
 
 def get_bytes(url: str, timeout: float = 60.0, retries: int = 4) -> bytes:
@@ -68,7 +149,7 @@ def get_bytes(url: str, timeout: float = 60.0, retries: int = 4) -> bytes:
         except (urllib.error.URLError, http.client.HTTPException, TimeoutError, ConnectionError, OSError) as exc:
             last_error = exc
         time.sleep(0.6 * (attempt + 1) + random.random() * 0.3)
-    raise DownloadError(f"请求失败: {url} ({last_error})")
+    raise DownloadError(f"请求失败: {url} ({_describe_error(last_error) if last_error else '未知错误'})")
 
 
 def get_json(url: str, timeout: float = 60.0, retries: int = 4, headers: dict[str, str] | None = None) -> Any:
@@ -92,7 +173,7 @@ def _get_with_headers(url: str, headers: dict[str, str], timeout: float, retries
         except (urllib.error.URLError, http.client.HTTPException, TimeoutError, ConnectionError, OSError) as exc:
             last_error = exc
         time.sleep(0.6 * (attempt + 1) + random.random() * 0.3)
-    raise DownloadError(f"请求失败: {url} ({last_error})")
+    raise DownloadError(f"请求失败: {url} ({_describe_error(last_error) if last_error else '未知错误'})")
 
 
 def post_json_status(

@@ -30,16 +30,23 @@ def rgba(hex_color: str, alpha: float) -> str:
     return f"rgba({color.red()}, {color.green()}, {color.blue()}, {alpha:.3f})"
 
 
-def ui_font() -> str:
+def ui_fonts() -> list[str]:
+    """按平台给出字体候选；Win7 没有 Segoe UI Variable，会自动落到后两个。"""
     if sys.platform == "win32":
-        return "Segoe UI Variable Text"
+        return ["Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei"]
     if sys.platform == "darwin":
-        return "SF Pro Text"
-    return "Noto Sans CJK SC"
+        return ["SF Pro Text", "PingFang SC", "Helvetica Neue"]
+    return ["Noto Sans CJK SC", "Noto Sans", "DejaVu Sans"]
+
+
+def ui_font() -> str:
+    return ui_fonts()[0]
 
 
 def apply_font(app: QApplication) -> None:
-    font = QFont(ui_font(), 10)
+    font = QFont()
+    font.setFamilies(ui_fonts())
+    font.setPointSize(10)
     font.setStyleStrategy(QFont.PreferAntialias)
     app.setFont(font)
 

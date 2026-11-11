@@ -21,12 +21,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config-dir", default=None, help="配置目录")
     parser.add_argument("--screenshot", default=None, help="渲染窗口并保存 PNG 后退出（测试用）")
     parser.add_argument("--page", default="home", choices=["home", "versions", "downloads", "account", "settings"])
+    parser.add_argument(
+        "--insecure-tls",
+        action="store_true",
+        help="跳过 HTTPS 证书校验（仅供代理/证书异常时临时排查）",
+    )
     parser.add_argument("--version", action="version", version=f"MCL Studio {__version__}")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.insecure_tls:
+        # 必须在导入 mclauncher.net 之前设置，SSL 上下文在模块加载时创建
+        os.environ["MCL_INSECURE_TLS"] = "1"
     os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication([sys.argv[0]])
