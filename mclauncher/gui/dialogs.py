@@ -6,16 +6,17 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QHBoxLayout,
+    QHeaderView,
     QListWidgetItem,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 from qfluentwidgets import (
-    BodyLabel,
     CaptionLabel,
     ListWidget,
     MessageBoxBase,
-    PrimaryPushButton,
     StrongBodyLabel,
     SubtitleLabel,
 )
@@ -40,10 +41,27 @@ def short_game_version(version_id: str) -> str:
     return text
 
 
+def version_group(version_id: str) -> str:
+    """分组键：``1.20.1`` -> ``1.20``，``26.3`` -> ``26``。"""
+    parts = short_game_version(version_id).split(".")
+    if len(parts) >= 2:
+        return f"{parts[0]}.{parts[1]}"
+    return parts[0] if parts else "其它"
+
+
+def _version_sort_key(version_id: str) -> tuple:
+    """把 1.21.11 拆成数字元组，保证 11 > 9 而不是字符串比较。"""
+    chunks = []
+    for piece in short_game_version(version_id).split("."):
+        chunks.append(int(piece) if piece.isdigit() else 0)
+    return tuple(chunks)
+
+
 class VersionPickerDialog(MessageBoxBase):
     """选择要安装的模组/资源包文件。
 
-    左侧列出所有可用文件，第一行是推荐版本并默认选中。
+    左侧按游戏版本折叠列出可用版本，右侧是该版本下的文件列表，
+    第一行为推荐版本并默认选中。
     """
 
     def __init__(
@@ -57,13 +75,16 @@ class VersionPickerDialog(MessageBoxBase):
         super().__init__(parent)
         self.service = service
         self.project = project
-        self.game_version = game_version
+        self.game_version = short_game_version(game_version or "")
         self.loader = loader
         self.selected_version: dict[str, Any] | None = None
+        self.all_versions: list[dict[str, Any]] = []
         self.versions: list[dict[str, Any]] = []
         self._worker: Worker | None = None
         self._failed = False
+        self._loading_group = False
 
+        # 头部
         head = QHBoxLayout()
         head.setSpacing(12)
         self.icon = ProjectIcon(48, self)
@@ -75,9 +96,9 @@ class VersionPickerDialog(MessageBoxBase):
         self.titleLabel = SubtitleLabel(project.get("title") or "选择版本", self)
         head_texts.addWidget(self.titleLabel)
 
-        meta = f"{project.get('author') or '未知作者'}"
-        if game_version:
-            meta += f" · 游戏 {short_game_version(game_version)}"
+        meta = str(project.get("author") or "未知作者")
+        if self.game_version:
+            meta += f" · 游戏 {self.game_version}"
         if loader:
             meta += f" · {loader}"
         self.meta_label = CaptionLabel(meta, self)
@@ -86,48 +107,36 @@ class VersionPickerDialog(MessageBoxBase):
         head.addLayout(head_texts, 1)
         self.viewLayout.addLayout(head)
 
+        # 主体：左游戏版本树 / 右文件列表
         body = QHBoxLayout()
-        body.setSpacing(14)
+        body.setSpacing(12)
 
-        # 左侧：可用文件列表
+        left = QVBoxLayout()
+        left.setSpacing(6)
+        left_title = StrongBodyLabel("游戏版本", self)
+        left.addWidget(left_title)
+        self.tree = QTreeWidget(self)
+        self.tree.setHeaderHidden(True)
+        self.tree.setMinimumWidth(200)
+        self.tree.setMinimumHeight(360)
+        self.tree.setRootIsDecorated(True)
+        self.tree.setAnimated(True)
+        self.tree.setIndentation(14)
+        self.tree.itemSelectionChanged.connect(self._on_tree_selection)
+        left.addWidget(self.tree, 1)
+        body.addLayout(left)
+
+        right = QVBoxLayout()
+        right.setSpacing(6)
+        self.file_title = StrongBodyLabel("可用文件", self)
+        right.addWidget(self.file_title)
         self.list_widget = ListWidget(self)
         self.list_widget.setMinimumWidth(380)
-        self.list_widget.setMinimumHeight(340)
+        self.list_widget.setMinimumHeight(360)
         self.list_widget.setSpacing(4)
         self.list_widget.currentRowChanged.connect(self._on_row_changed)
-        body.addWidget(self.list_widget, 1)
-
-        # 右侧：选中项详情
-        detail = QWidget(self)
-        detail.setFixedWidth(230)
-        detail_layout = QVBoxLayout(detail)
-        detail_layout.setContentsMargins(0, 4, 0, 0)
-        detail_layout.setSpacing(8)
-
-        self.detail_title = StrongBodyLabel("", detail)
-        self.detail_title.setWordWrap(True)
-        detail_layout.addWidget(self.detail_title)
-
-        self.detail_type = CaptionLabel("", detail)
-        self.detail_type.setTextColor(palette()["secondary"], palette()["secondary"])
-        detail_layout.addWidget(self.detail_type)
-
-        self.detail_game = CaptionLabel("", detail)
-        self.detail_game.setTextColor(palette()["secondary"], palette()["secondary"])
-        self.detail_game.setWordWrap(True)
-        detail_layout.addWidget(self.detail_game)
-
-        self.detail_date = CaptionLabel("", detail)
-        self.detail_date.setTextColor(palette()["tertiary"], palette()["tertiary"])
-        detail_layout.addWidget(self.detail_date)
-
-        self.detail_file = CaptionLabel("", detail)
-        self.detail_file.setTextColor(palette()["tertiary"], palette()["tertiary"])
-        self.detail_file.setWordWrap(True)
-        detail_layout.addWidget(self.detail_file)
-
-        detail_layout.addStretch(1)
-        body.addWidget(detail)
+        right.addWidget(self.list_widget, 1)
+        body.addLayout(right, 1)
 
         self.viewLayout.addLayout(body)
 
@@ -139,13 +148,13 @@ class VersionPickerDialog(MessageBoxBase):
         self.cancelButton.setText("取消")
         self.yesButton.setEnabled(False)
 
-        self.widget.setMinimumWidth(760)
-        self.widget.setMinimumHeight(520)
+        self.widget.setMinimumWidth(820)
+        self.widget.setMinimumHeight(540)
         self._load()
 
+    # ------------------------------------------------------------------
     def exec(self) -> int:  # type: ignore[override]
-        """先等版本列表加载完成再显示，避免打开时是一片空白。"""
-        if self._worker is not None and not self.versions and not self._failed:
+        if self._worker is not None and not self.all_versions and not self._failed:
             self._wait_until_loaded()
         return super().exec()
 
@@ -158,7 +167,7 @@ class VersionPickerDialog(MessageBoxBase):
         timer.setInterval(60)
 
         def poll() -> None:
-            if self.versions or self._failed or deadline.hasExpired():
+            if self.all_versions or self._failed or deadline.hasExpired():
                 timer.stop()
                 loop.quit()
 
@@ -170,11 +179,12 @@ class VersionPickerDialog(MessageBoxBase):
     # ------------------------------------------------------------------
     def _load(self) -> None:
         project_id = str(self.project.get("id") or "")
+        # 不带版本过滤，一次取全，交给左侧树分组
         worker = Worker(
             lambda w: self.service.content_versions(
                 project_id,
                 project_type=str(self.project.get("project_type") or "mod"),
-                game_version=self.game_version,
+                game_version=None,
                 loader=self.loader,
                 source=self.project.get("source"),
             )
@@ -187,25 +197,121 @@ class VersionPickerDialog(MessageBoxBase):
         QThreadPool.globalInstance().start(worker)
 
     def _on_loaded(self, versions: list[dict[str, Any]]) -> None:
-        self.versions = versions
-        self.list_widget.clear()
+        self.all_versions = versions
         if not versions:
-            self.status_label.setText("没有找到匹配的文件，换个游戏版本或加载器试试。")
+            self.status_label.setText("没有找到可用文件，换个加载器或内容源试试。")
             self.yesButton.setEnabled(False)
             return
 
-        for index, version in enumerate(versions):
-            item = self._build_row(version, index)
+        # 按游戏版本建树
+        buckets: dict[str, list[dict[str, Any]]] = {}
+        for version in versions:
+            games = [short_game_version(g) for g in version.get("game_versions") or []]
+            if not games:
+                games = ["未知"]
+            for game in games:
+                buckets.setdefault(game, []).append(version)
+
+        self.tree.clear()
+        groups: dict[str, list[str]] = {}
+        for game in buckets:
+            groups.setdefault(version_group(game), []).append(game)
+
+        target_item: QTreeWidgetItem | None = None
+        for group in sorted(groups, key=_version_sort_key, reverse=True):
+            members = sorted(groups[group], key=_version_sort_key, reverse=True)
+            parent = QTreeWidgetItem(self.tree, [f"{group}.x（{len(members)}）"])
+            font = parent.font(0)
+            font.setBold(True)
+            parent.setFont(0, font)
+            parent.setFlags(parent.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+
+            for game in members:
+                child = QTreeWidgetItem(parent, [game])
+                child.setData(0, Qt.UserRole, game)
+                child.setToolTip(0, f"{len(buckets[game])} 个可用文件")
+                if game == self.game_version:
+                    target_item = child
+
+            expanded = self.game_version and version_group(self.game_version) == group
+            parent.setExpanded(bool(expanded) or (target_item is None and group == max(groups, key=_version_sort_key)))
+
+        if target_item is not None:
+            self.tree.setCurrentItem(target_item)
+            self.tree.scrollToItem(target_item)
+        else:
+            # 默认选第一个可选的叶子节点
+            leaf = self._first_leaf()
+            if leaf is not None:
+                self.tree.setCurrentItem(leaf)
+
+    def _first_leaf(self) -> QTreeWidgetItem | None:
+        for i in range(self.tree.topLevelItemCount()):
+            parent = self.tree.topLevelItem(i)
+            if parent.childCount():
+                return parent.child(0)
+        return None
+
+    def _on_tree_selection(self) -> None:
+        if self._loading_group:
+            return
+        item = self.tree.currentItem()
+        if item is None or item.childCount():
+            return
+        game = item.data(0, Qt.UserRole)
+        if not game:
+            return
+        self._populate_files(str(game))
+
+    def _populate_files(self, game: str) -> None:
+        self._loading_group = True
+        self.list_widget.clear()
+        files = [
+            v for v in self.all_versions
+            if game in [short_game_version(g) for g in v.get("game_versions") or []]
+        ]
+        # 推荐版本（release 且最新）排第一
+        files.sort(
+            key=lambda v: (
+                0 if str(v.get("release_type")) == "release" else 1,
+                -self._timestamp(v.get("date_published")),
+            )
+        )
+        self.versions = files
+        for index, version in enumerate(files):
+            item = self._build_row(version, index, index == 0)
             self.list_widget.addItem(item)
             widget = getattr(item, "_row_widget", None)
             if widget is not None:
                 self.list_widget.setItemWidget(item, widget)
 
-        self.status_label.setText(f"共 {len(versions)} 个文件，第一行为推荐版本。")
-        self.list_widget.setCurrentRow(0)
-        self.yesButton.setEnabled(True)
+        self.file_title.setText(f"可用文件 · {game}")
+        if files:
+            self.list_widget.setCurrentRow(0)
+            self.status_label.setText(
+                f"{game} 共 {len(files)} 个文件，第一行为推荐版本。"
+            )
+        else:
+            self.selected_version = None
+            self.yesButton.setEnabled(False)
+            self.status_label.setText(f"{game} 没有可用文件。")
+        self._loading_group = False
 
-    def _build_row(self, version: dict[str, Any], index: int) -> QListWidgetItem:
+    @staticmethod
+    def _timestamp(value: Any) -> float:
+        import datetime
+
+        text = str(value or "").strip()
+        if not text:
+            return 0.0
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            return datetime.datetime.fromisoformat(text).timestamp()
+        except (ValueError, OSError, OverflowError):
+            return 0.0
+
+    def _build_row(self, version: dict[str, Any], index: int, recommended: bool) -> QListWidgetItem:
         name = str(version.get("name") or version.get("version_number") or "未命名")
         item = QListWidgetItem()
 
@@ -214,11 +320,8 @@ class VersionPickerDialog(MessageBoxBase):
         layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(2)
 
-        title_text = name
-        if version.get("recommended"):
-            title_text = f"★ 推荐 · {name}"
-        title = StrongBodyLabel(title_text, row)
-        if version.get("recommended"):
+        title = StrongBodyLabel(f"★ 推荐 · {name}" if recommended else name, row)
+        if recommended:
             font = title.font()
             font.setWeight(QFont.DemiBold)
             title.setFont(font)
@@ -226,19 +329,18 @@ class VersionPickerDialog(MessageBoxBase):
         layout.addWidget(title)
 
         meta_parts = [RELEASE_LABELS.get(str(version.get("release_type")), "正式版")]
-        games = list(version.get("game_versions") or [])
-        if games:
-            meta_parts.append(", ".join(games[:3]) + ("…" if len(games) > 3 else ""))
         date = str(version.get("date_published") or "")[:10]
         if date:
             meta_parts.append(date)
+        size = int((version.get("file") or {}).get("size") or 0)
+        if size:
+            meta_parts.append(f"{size / 1048576:.1f} MB")
         meta = CaptionLabel(" · ".join(meta_parts), row)
         meta.setTextColor(palette()["secondary"], palette()["secondary"])
         layout.addWidget(meta)
 
         item.setSizeHint(row.sizeHint())
         item.setData(Qt.UserRole, index)
-        # 把控件挂到 item 上，addItem 之后由 caller 设置
         item._row_widget = row  # type: ignore[attr-defined]
         return item
 
@@ -247,25 +349,8 @@ class VersionPickerDialog(MessageBoxBase):
             self.selected_version = None
             self.yesButton.setEnabled(False)
             return
-        version = self.versions[row]
-        self.selected_version = version
+        self.selected_version = self.versions[row]
         self.yesButton.setEnabled(True)
-
-        self.detail_title.setText(str(version.get("name") or version.get("version_number") or ""))
-        self.detail_type.setText(
-            "推荐版本" if version.get("recommended")
-            else RELEASE_LABELS.get(str(version.get("release_type")), "正式版")
-        )
-        games = list(version.get("game_versions") or [])
-        self.detail_game.setText("游戏版本：" + (", ".join(games) if games else "—"))
-        self.detail_date.setText("发布时间：" + (str(version.get("date_published") or "")[:10] or "—"))
-        file_info = version.get("file") or {}
-        filename = str(file_info.get("filename") or "")
-        size = int(file_info.get("size") or 0)
-        if size:
-            self.detail_file.setText(f"{filename}\n{size / 1048576:.1f} MB")
-        else:
-            self.detail_file.setText(filename or "")
 
     def _on_error(self, message: str) -> None:
         self._failed = True
