@@ -3,12 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QBrush, QColor, QFont
 from PySide6.QtWidgets import (
     QHBoxLayout,
-    QHeaderView,
     QListWidgetItem,
-    QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -19,6 +17,7 @@ from qfluentwidgets import (
     MessageBoxBase,
     StrongBodyLabel,
     SubtitleLabel,
+    TreeWidget,
 )
 
 from .icons import ProjectIcon
@@ -115,13 +114,16 @@ class VersionPickerDialog(MessageBoxBase):
         left.setSpacing(6)
         left_title = StrongBodyLabel("游戏版本", self)
         left.addWidget(left_title)
-        self.tree = QTreeWidget(self)
-        self.tree.setHeaderHidden(True)
-        self.tree.setMinimumWidth(200)
+        self.tree = TreeWidget(self)
+        self.tree.setMinimumWidth(210)
         self.tree.setMinimumHeight(360)
         self.tree.setRootIsDecorated(True)
         self.tree.setAnimated(True)
-        self.tree.setIndentation(14)
+        self.tree.setIndentation(12)
+        self.tree.setHeaderHidden(True)
+        self.tree.setBorderVisible(True)
+        self.tree.setBorderRadius(8)
+        self.tree.setCheckedColor(QColor("#0F6CBD"), QColor("#4CC2FF"))
         self.tree.itemSelectionChanged.connect(self._on_tree_selection)
         left.addWidget(self.tree, 1)
         body.addLayout(left)
@@ -203,7 +205,7 @@ class VersionPickerDialog(MessageBoxBase):
             self.yesButton.setEnabled(False)
             return
 
-        # 按游戏版本建树
+        # 按游戏版本建桶
         buckets: dict[str, list[dict[str, Any]]] = {}
         for version in versions:
             games = [short_game_version(g) for g in version.get("game_versions") or []]
@@ -217,33 +219,45 @@ class VersionPickerDialog(MessageBoxBase):
         for game in buckets:
             groups.setdefault(version_group(game), []).append(game)
 
+        ordered_groups = sorted(groups, key=_version_sort_key, reverse=True)
         target_item: QTreeWidgetItem | None = None
-        for group in sorted(groups, key=_version_sort_key, reverse=True):
+        target_group = version_group(self.game_version) if self.game_version else ""
+
+        for group in ordered_groups:
             members = sorted(groups[group], key=_version_sort_key, reverse=True)
-            parent = QTreeWidgetItem(self.tree, [f"{group}.x（{len(members)}）"])
+            parent = QTreeWidgetItem(self.tree, [f"{group}.x"])
+            parent.setData(0, Qt.UserRole, "")
             font = parent.font(0)
             font.setBold(True)
             parent.setFont(0, font)
+            parent.setForeground(0, QBrush(QColor("#5A5A5A")))
             parent.setFlags(parent.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            parent.setExpanded(True)
 
             for game in members:
                 child = QTreeWidgetItem(parent, [game])
                 child.setData(0, Qt.UserRole, game)
-                child.setToolTip(0, f"{len(buckets[game])} 个可用文件")
+                count = len(buckets[game])
+                child.setToolTip(0, f"{game} · {count} 个可用文件")
                 if game == self.game_version:
                     target_item = child
 
-            expanded = self.game_version and version_group(self.game_version) == group
-            parent.setExpanded(bool(expanded) or (target_item is None and group == max(groups, key=_version_sort_key)))
+        # 折叠非目标分组，只展开命中的那一组
+        if target_group:
+            for i in range(self.tree.topLevelItemCount()):
+                node = self.tree.topLevelItem(i)
+                node.setExpanded(node.text(0).rstrip(".x") == target_group)
+        else:
+            for i in range(self.tree.topLevelItemCount()):
+                self.tree.topLevelItem(i).setExpanded(i == 0)
 
+        if target_item is None:
+            target_item = self._first_leaf()
         if target_item is not None:
             self.tree.setCurrentItem(target_item)
             self.tree.scrollToItem(target_item)
-        else:
-            # 默认选第一个可选的叶子节点
-            leaf = self._first_leaf()
-            if leaf is not None:
-                self.tree.setCurrentItem(leaf)
+            if target_item.parent() is not None:
+                target_item.parent().setExpanded(True)
 
     def _first_leaf(self) -> QTreeWidgetItem | None:
         for i in range(self.tree.topLevelItemCount()):

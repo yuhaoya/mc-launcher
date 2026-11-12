@@ -12,7 +12,7 @@ from typing import Any, Callable, TextIO
 
 from . import maven
 from .errors import LauncherError
-from .net import DownloadTask, download_many
+from .net import DownloadTask, apply_mirror_task, download_many
 from .paths import Paths
 from .progress import Progress
 from .rules import build_context, current_os, is_allowed
@@ -56,8 +56,8 @@ def build_library_plan(
     def add_task(task: DownloadTask) -> None:
         key = str(task.dest).lower()
         if key not in seen:
-            # 👇 在加入任务队列时，统一应用镜像转换
-            task.url = mirror_func(task.url)
+            # 镜像转换，同时保留官方地址作为回退源
+            task = apply_mirror_task(task, mirror_func)
             seen[key] = task
             plan.tasks.append(task)
 
@@ -222,7 +222,7 @@ class Installer:
             self.log("[*] 客户端 jar 已存在")
             return
         self._download(
-            [DownloadTask(self.mirror_func(client["url"]), dest, client.get("sha1"), client.get("size"))],
+            [apply_mirror_task(DownloadTask(client["url"], dest, client.get("sha1"), client.get("size")), self.mirror_func)],
             "下载客户端 jar",
         )
 
@@ -270,7 +270,7 @@ class Installer:
         dest = self.paths.assets_indexes / f"{index_id}.json"
         if not file_matches(dest, index_meta.get("sha1"), index_meta.get("size")):
             self._download(
-                [DownloadTask(index_meta["url"], dest, index_meta.get("sha1"), index_meta.get("size"))],
+                [apply_mirror_task(DownloadTask(index_meta["url"], dest, index_meta.get("sha1"), index_meta.get("size")), self.mirror_func)],
                 f"资源索引 {index_id}",
             )
         index = read_json(dest)
@@ -286,11 +286,14 @@ class Installer:
                 continue
             seen.add(digest)
             tasks.append(
-                DownloadTask(
-                    self.mirror_func(f"{RESOURCES_BASE}{digest[:2]}/{digest}"),
-                    self.paths.assets_objects / digest[:2] / digest,
-                    digest,
-                    obj.get("size"),
+                apply_mirror_task(
+                    DownloadTask(
+                        f"{RESOURCES_BASE}{digest[:2]}/{digest}",
+                        self.paths.assets_objects / digest[:2] / digest,
+                        digest,
+                        obj.get("size"),
+                    ),
+                    self.mirror_func,
                 )
             )
         self.log(f"[*] 资源文件 {len(tasks)} 个，共 {human_size(sum(t.size or 0 for t in tasks))}")
@@ -344,7 +347,7 @@ class Installer:
         dest = self.paths.assets / "log_configs" / file_id
         if not file_matches(dest, file_info.get("sha1"), file_info.get("size")):
             self._download(
-                [DownloadTask(url, dest, file_info.get("sha1"), file_info.get("size"))],
+                [apply_mirror_task(DownloadTask(url, dest, file_info.get("sha1"), file_info.get("size")), self.mirror_func)],
                 "下载日志配置",
             )
         self._ensure_pattern_log(dest)

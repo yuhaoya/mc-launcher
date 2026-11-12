@@ -94,6 +94,28 @@ class DownloadTask:
     dest: Path
     sha1: str | None = None
     size: int | None = None
+    fallbacks: tuple[str, ...] = ()
+
+
+def with_fallback(primary: str, official: str) -> tuple[str, tuple[str, ...]]:
+    """构造 (主地址, 备用地址列表)。
+
+    镜像转换后地址会变，原官方地址就是天然的备用源：镜像挂了就回退官方，
+    避免一个镜像服务不可用导致整个安装失败。
+    """
+    if official and official != primary:
+        return primary, (official,)
+    return primary, ()
+
+
+def apply_mirror_task(task: DownloadTask, mirror_func) -> DownloadTask:
+    """把任务地址替换成镜像地址，同时保留官方地址作为回退。"""
+    original = task.url
+    mirrored = mirror_func(original)
+    if mirrored == original:
+        return task
+    fallbacks = tuple(dict.fromkeys((*task.fallbacks, original)))
+    return DownloadTask(mirrored, task.dest, task.sha1, task.size, fallbacks)
 
 
 def _open(url: str, data: bytes | None = None, headers: dict[str, str] | None = None, timeout: float = 30.0):
@@ -245,13 +267,48 @@ def download_file(
     progress: Progress | None = None,
     retries: int = 3,
     timeout: float = 40.0,
+    fallbacks: tuple[str, ...] | list[str] = (),
 ) -> int:
-    """下载单个文件到 dest，返回本次实际下载的字节数（跳过时为 0）。"""
+    """下载单个文件到 dest，返回本次实际下载的字节数（跳过时为 0）。
+
+    ``fallbacks`` 里的地址会在主地址反复失败后依次尝试，
+    用于「镜像优先、官方兜底」的场景。
+    """
     if file_matches(dest, sha1, size):
         return 0
     if progress is not None and progress.cancelled:
         raise DownloadError("操作已取消")
 
+    candidates = [url]
+    for extra in fallbacks:
+        if extra and extra not in candidates:
+            candidates.append(extra)
+
+    last_error: Exception | None = None
+    for index, candidate in enumerate(candidates):
+        try:
+            return _download_one(
+                candidate, dest, sha1, size, progress, retries, timeout
+            )
+        except DownloadError as exc:
+            last_error = exc
+            if index + 1 < len(candidates):
+                if progress is not None and progress.cancelled:
+                    raise DownloadError("操作已取消") from exc
+                time.sleep(0.6)
+
+    raise DownloadError(f"下载失败: {url}\n  -> {last_error}")
+
+
+def _download_one(
+    url: str,
+    dest: Path,
+    sha1: str | None,
+    size: int | None,
+    progress: Progress | None,
+    retries: int,
+    timeout: float,
+) -> int:
     ensure_dir(dest.parent)
     last_error: Exception | None = None
     part_suffix = f".part{os.getpid()}-{threading.get_ident()}"
@@ -300,7 +357,7 @@ def download_file(
         if attempt < retries:
             time.sleep(0.5 * attempt + random.random() * 0.5)
 
-    raise DownloadError(f"下载失败: {url}\n  -> {last_error}")
+    raise DownloadError(f"{url}\n  -> {last_error}")
 
 
 def download_many(
@@ -337,7 +394,15 @@ def download_many(
     errors: list[tuple[DownloadTask, Exception]] = []
 
     def run(task: DownloadTask) -> None:
-        download_file(task.url, task.dest, task.sha1, task.size, progress, timeout=timeout)
+        download_file(
+            task.url,
+            task.dest,
+            task.sha1,
+            task.size,
+            progress,
+            timeout=timeout,
+            fallbacks=task.fallbacks,
+        )
 
     with ThreadPoolExecutor(max_workers=max(1, min(workers, len(pending)))) as pool:
         futures = {pool.submit(run, task): task for task in pending}

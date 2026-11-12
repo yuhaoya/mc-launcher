@@ -830,34 +830,16 @@ class LauncherService:
                 log_callback(f"[*] {msg}")
 
         def download_file_with_fallback(url: str, dest: Path):
-            """带降级逻辑的下载器：先尝试镜像，失败则回退到官方"""
-            # 生成候选 URL 列表（镜像源 + 原始官方源）
-            candidates = []
-            mirror_url = self.apply_mirror(url)
-            if mirror_url != url:
-                candidates.append(mirror_url)
-            if url not in candidates:
-                candidates.append(url)
+            """带降级的下载：镜像优先，失败自动回退官方源。"""
+            from .net import download_file
 
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-            last_err = None
-
-            for candidate in candidates:
-                try:
-                    req = urllib.request.Request(candidate, headers=headers)
-                    with urllib.request.urlopen(req, timeout=30) as resp:
-                        with open(dest, 'wb') as f:
-                            f.write(resp.read())
-                    return  # 下载成功，直接返回
-                except Exception as e:
-                    last_err = e
-                    log(f"下载失败 ({candidate})：{e}")
-                    if candidate == candidates[-1]:
-                        break
-                    log("正在降级切换至备用源重试...")
-                    time.sleep(1)
-
-            raise last_err
+            mirrored = self.apply_mirror(url)
+            fallbacks = () if mirrored == url else (url,)
+            try:
+                download_file(mirrored, dest, fallbacks=fallbacks, retries=3)
+            except Exception as exc:
+                log(f"最终下载失败: {url} -> {exc}")
+                raise
 
         check_cancel()
 

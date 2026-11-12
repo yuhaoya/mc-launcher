@@ -37,8 +37,15 @@ class VersionRepository:
             if isinstance(data, dict) and "versions" in data:
                 return data
         try:
-            url = self.mirror_func(MANIFEST_URL)
-            data = get_json(url)
+            mirrored = self.mirror_func(MANIFEST_URL)
+            url = mirrored
+            try:
+                data = get_json(url)
+            except Exception:
+                if mirrored == MANIFEST_URL:
+                    raise
+                # 镜像不可用时回退官方源
+                data = get_json(MANIFEST_URL)
             if not isinstance(data, dict) or "versions" not in data:
                 raise LauncherError("Mojang 返回的版本清单格式异常")
             write_json_atomic(cache, data)
@@ -75,11 +82,19 @@ class VersionRepository:
             if isinstance(data, dict) and data.get("id") == version_id:
                 return data
         entry = self.resolve(version_id)
-        url = self.mirror_func(entry["url"])
+        original = entry["url"]
+        url = self.mirror_func(original)
         local.parent.mkdir(parents=True, exist_ok=True)
         tmp = local.with_name(local.name + ".download")
         try:
-            download_file(url, tmp, entry.get("sha1"), entry.get("size"), retries=4)
+            download_file(
+                url,
+                tmp,
+                entry.get("sha1"),
+                entry.get("size"),
+                retries=4,
+                fallbacks=() if url == original else (original,),
+            )
             data = read_json(tmp)
             if not isinstance(data, dict) or data.get("id") != version_id:
                 raise LauncherError(f"版本 {version_id} 的 JSON 无效")
