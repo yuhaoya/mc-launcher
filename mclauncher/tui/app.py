@@ -233,14 +233,8 @@ class MCLTuiApp(App):
                     yield Input(placeholder="搜索关键词，例如 sodium", id="content-search")
                     yield Button("搜索", id="content-search-btn", variant="primary")
                 with Horizontal():
-                    yield Label("范围")
-                    yield Select(
-                        [("全部", "all"), ("全部正式版", "release")],
-                        id="content-scope",
-                        value="all",
-                        allow_blank=False,
-                    )
-                    yield Select([], id="content-game", prompt="游戏版本")
+                    yield Label("游戏版本")
+                    yield Select([], id="content-game", prompt="全部正式版")
                     yield Label("安装到")
                     yield Select([], id="content-target", prompt="已安装版本")
                     yield Label("加载器")
@@ -812,16 +806,16 @@ class MCLTuiApp(App):
         return None if value is Select.BLANK else str(value)
 
     def _populate_content_versions(self) -> None:
-        """内容页下拉：游戏版本用于过滤搜索，「安装到」只列已安装版本。"""
-        scope = self._content_scope()
-
+        """内容页下拉：游戏版本只列正式版，「安装到」只列已安装版本。"""
         game_select = self.query_one("#content-game", Select)
         game_options = [("全部版本", "")]
+        seen: set[str] = set()
         for row in self._all_versions:
-            if scope == "release" and row.get("type") != "release":
+            version_id = row["id"]
+            if version_id in seen or row.get("type") != "release":
                 continue
-            suffix = "（已安装）" if row.get("installed") or row["id"] in self._installed_ids else ""
-            game_options.append((f"{row['id']}{suffix}", row["id"]))
+            seen.add(version_id)
+            game_options.append((version_id, version_id))
         current_game = game_select.value if game_select.value is not Select.BLANK else ""
         game_select.set_options(game_options)
         if any(value == current_game for _, value in game_options):
@@ -841,10 +835,6 @@ class MCLTuiApp(App):
             target_select.value = current_target
         elif target_options:
             target_select.value = target_options[0][1]
-
-    def _content_scope(self) -> str:
-        value = self.query_one("#content-scope", Select).value
-        return "release" if value == "release" else "all"
 
     def _content_target(self) -> str | None:
         select = self.query_one("#content-target", Select)
@@ -1137,8 +1127,6 @@ class MCLTuiApp(App):
         elif event.select.id == "content-kind":
             is_mod = self._content_kind() == "mod"
             self.query_one("#content-loader", Select).disabled = not is_mod
-        elif event.select.id == "content-scope":
-            self._populate_content_versions()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.data_table.id == "versions-table":
