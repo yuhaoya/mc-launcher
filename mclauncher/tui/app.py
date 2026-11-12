@@ -233,8 +233,16 @@ class MCLTuiApp(App):
                     yield Input(placeholder="搜索关键词，例如 sodium", id="content-search")
                     yield Button("搜索", id="content-search-btn", variant="primary")
                 with Horizontal():
-                    yield Label("已安装版本")
-                    yield Select([], id="content-game", prompt="选择已安装版本")
+                    yield Label("范围")
+                    yield Select(
+                        [("全部", "all"), ("全部正式版", "release")],
+                        id="content-scope",
+                        value="all",
+                        allow_blank=False,
+                    )
+                    yield Select([], id="content-game", prompt="游戏版本")
+                    yield Label("安装到")
+                    yield Select([], id="content-target", prompt="已安装版本")
                     yield Label("加载器")
                     yield Select(
                         [("Fabric", "fabric"), ("Forge", "forge"), ("Quilt", "quilt"), ("NeoForge", "neoforge")],
@@ -804,19 +812,45 @@ class MCLTuiApp(App):
         return None if value is Select.BLANK else str(value)
 
     def _populate_content_versions(self) -> None:
-        """内容页的游戏版本下拉框只列已安装版本。"""
-        select = self.query_one("#content-game", Select)
-        options = [
+        """内容页下拉：游戏版本用于过滤搜索，「安装到」只列已安装版本。"""
+        scope = self._content_scope()
+
+        game_select = self.query_one("#content-game", Select)
+        game_options = [("全部版本", "")]
+        for row in self._all_versions:
+            if scope == "release" and row.get("type") != "release":
+                continue
+            suffix = "（已安装）" if row.get("installed") or row["id"] in self._installed_ids else ""
+            game_options.append((f"{row['id']}{suffix}", row["id"]))
+        current_game = game_select.value if game_select.value is not Select.BLANK else ""
+        game_select.set_options(game_options)
+        if any(value == current_game for _, value in game_options):
+            game_select.value = current_game
+        else:
+            game_select.value = ""
+
+        target_select = self.query_one("#content-target", Select)
+        target_options = [
             (row["id"], row["id"])
             for row in self._all_versions
             if row.get("installed") or row["id"] in self._installed_ids
         ]
-        current = select.value if select.value is not Select.BLANK else None
-        select.set_options(options)
-        if current and any(value == current for _, value in options):
-            select.value = current
-        elif options:
-            select.value = options[0][1]
+        current_target = target_select.value if target_select.value is not Select.BLANK else None
+        target_select.set_options(target_options)
+        if current_target and any(value == current_target for _, value in target_options):
+            target_select.value = current_target
+        elif target_options:
+            target_select.value = target_options[0][1]
+
+    def _content_scope(self) -> str:
+        value = self.query_one("#content-scope", Select).value
+        return "release" if value == "release" else "all"
+
+    def _content_target(self) -> str | None:
+        select = self.query_one("#content-target", Select)
+        if select.value is Select.BLANK:
+            return None
+        return str(select.value)
 
     @work(thread=True, exclusive=True, group="content-search")
     def search_content_worker(self, query: str, kind: str, game_version: str | None, loader: str | None, source: str) -> None:
@@ -869,9 +903,6 @@ class MCLTuiApp(App):
             self.notify("CurseForge 需要先在设置里填写 API Key", severity="warning")
             return
         game_version = self._content_game_version()
-        if not game_version:
-            self.notify("请先在「已安装版本」里选择一个版本", severity="warning")
-            return
         self.query_one("#content-status", Static).update(f"正在搜索 {source} …")
         self.search_content_worker(query, kind, game_version, self._content_loader(), source)
 
@@ -948,7 +979,7 @@ class MCLTuiApp(App):
                 project_type=kind,
                 game_version=game_version,
                 loader=loader,
-                version_id=self._content_game_version(),
+                version_id=self._content_target(),
                 chosen_version=chosen,
                 source=source,
                 log_callback=lambda m: self.call_from_thread(self._content_task_log, m),
@@ -996,6 +1027,9 @@ class MCLTuiApp(App):
         if not hit:
             self.notify("请先在搜索结果中选择一个项目", severity="warning")
             return
+        if not self._content_target():
+            self.notify("「安装到」里还没有已安装版本，请先安装游戏版本", severity="warning")
+            return
         files = getattr(self, "_content_files", [])
         table = self.query_one("#content-files", DataTable)
         if not files or table.cursor_row < 0:
@@ -1015,7 +1049,7 @@ class MCLTuiApp(App):
 
     def _open_content_dir(self) -> None:
         kind = self._content_kind()
-        path = self.service.content_dir(kind, self._content_game_version())
+        path = self.service.content_dir(kind, self._content_target())
         path.mkdir(parents=True, exist_ok=True)
         self.notify(f"内容目录：{path}", severity="information")
 
@@ -1103,6 +1137,8 @@ class MCLTuiApp(App):
         elif event.select.id == "content-kind":
             is_mod = self._content_kind() == "mod"
             self.query_one("#content-loader", Select).disabled = not is_mod
+        elif event.select.id == "content-scope":
+            self._populate_content_versions()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.data_table.id == "versions-table":
@@ -1124,7 +1160,8 @@ class MCLTuiApp(App):
         hit = self._selected_content()
         if not hit:
             return
-        game_version = self._content_game_version()
+        # 没指定过滤版本时，按安装目标实例的版本查文件，避免列出全部变体
+        game_version = self._content_game_version() or self._content_target()
         if not game_version:
             return
         self.load_content_files(

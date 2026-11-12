@@ -4,7 +4,7 @@ from typing import Any
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
-from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTableWidgetItem
+from PySide6.QtWidgets import QAbstractItemView, QHBoxLayout, QHeaderView, QTableWidgetItem, QVBoxLayout
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
@@ -16,6 +16,7 @@ from qfluentwidgets import (
     TableWidget,
 )
 
+from .icons import ProjectIcon
 from .theme import palette
 from .workers import Worker
 
@@ -46,8 +47,16 @@ class VersionPickerDialog(MessageBoxBase):
         self._worker: Worker | None = None
         self._failed = False
 
+        head = QHBoxLayout()
+        head.setSpacing(12)
+        self.icon = ProjectIcon(48, self)
+        self.icon.set_project(project.get("title") or "", str(project.get("icon_url") or ""))
+        head.addWidget(self.icon, 0, Qt.AlignTop)
+
+        head_texts = QVBoxLayout()
+        head_texts.setSpacing(4)
         self.titleLabel = SubtitleLabel(project.get("title") or "选择版本", self)
-        self.viewLayout.addWidget(self.titleLabel)
+        head_texts.addWidget(self.titleLabel)
 
         meta = f"{project.get('author') or '未知作者'}"
         if game_version:
@@ -56,8 +65,9 @@ class VersionPickerDialog(MessageBoxBase):
             meta += f" · {loader}"
         self.meta_label = CaptionLabel(meta, self)
         self.meta_label.setTextColor(palette()["secondary"], palette()["secondary"])
-        self.viewLayout.addWidget(self.meta_label)
-
+        head_texts.addWidget(self.meta_label)
+        head.addLayout(head_texts, 1)
+        self.viewLayout.addLayout(head)
         self.table = TableWidget(self)
         self.table.setColumnCount(4)
         self.table.setHorizontalHeaderLabels(["版本", "类型", "游戏版本", "发布时间"])

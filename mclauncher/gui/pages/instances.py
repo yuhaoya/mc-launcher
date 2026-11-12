@@ -336,24 +336,32 @@ class InstancesPage(QWidget):
         mods_dir = self._get_instance_subdir("mods")
         for f in sorted(mods_dir.iterdir()):
             if f.is_file() and ".jar" in f.name.lower():
-                item = QListWidgetItem()
-                if f.name.endswith(".disabled"):
-                    item.setText(f.name.replace(".disabled", ""))
-                    item.setForeground(Qt.gray)
-                    item.setToolTip("已禁用")
-                else:
-                    item.setText(f.name)
-                    item.setForeground(Qt.white if palette()["bg"] == "#202020" else Qt.black)
+                disabled = f.name.endswith(".disabled")
+                display_name = f.name.replace(".disabled", "") if disabled else f.name
+
+                item = QListWidgetItem(display_name)
+                item.setData(Qt.UserRole, str(f))
 
                 widget = QWidget()
                 layout = QHBoxLayout(widget)
-                layout.setContentsMargins(0, 0, 10, 0)
+                layout.setContentsMargins(10, 6, 10, 6)
+                layout.setSpacing(10)
+
+                name_label = BodyLabel(display_name)
+                if disabled:
+                    name_label.setTextColor(palette()["tertiary"], palette()["tertiary"])
+                    name_label.setToolTip("已禁用")
+                else:
+                    name_label.setTextColor(palette()["text"], palette()["text"])
+                layout.addWidget(name_label, 1)
 
                 size_str = human_size(f.stat().st_size)
-                layout.addWidget(CaptionLabel(size_str))
+                size_label = CaptionLabel(size_str)
+                size_label.setTextColor(palette()["tertiary"], palette()["tertiary"])
+                layout.addWidget(size_label)
 
                 toggle_btn = TransparentToolButton(FluentIcon.SYNC)
-                toggle_btn.setToolTip("启用/禁用")
+                toggle_btn.setToolTip("启用" if disabled else "禁用")
                 toggle_btn.clicked.connect(lambda _, p=f: self._toggle_mod(p))
                 layout.addWidget(toggle_btn)
 

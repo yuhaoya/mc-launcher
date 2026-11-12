@@ -38,6 +38,7 @@ from qfluentwidgets import (
 )
 
 from ...services import LauncherService
+from ..icons import ProjectIcon
 from ..models import TYPE_LABELS, VersionDelegate, VersionFilterProxy, VersionTableModel
 from ..theme import palette, rgba
 from ..widgets import SectionHeader, SettingRow
@@ -276,13 +277,28 @@ class VersionsPage(QWidget):
         filter_bar = QHBoxLayout()
         filter_bar.setSpacing(10)
 
-        game_label = CaptionLabel("游戏版本", self.content_tab)
-        game_label.setTextColor(palette()["secondary"], palette()["secondary"])
-        filter_bar.addWidget(game_label)
+        scope_label = CaptionLabel("游戏版本", self.content_tab)
+        scope_label.setTextColor(palette()["secondary"], palette()["secondary"])
+        filter_bar.addWidget(scope_label)
+        self.content_scope_combo = ComboBox(self.content_tab)
+        self.content_scope_combo.addItem("全部", userData="all")
+        self.content_scope_combo.addItem("全部正式版", userData="release")
+        self.content_scope_combo.setFixedWidth(130)
+        self.content_scope_combo.currentIndexChanged.connect(lambda _: self._rebuild_game_options())
+        filter_bar.addWidget(self.content_scope_combo)
+
         self.content_game_combo = ComboBox(self.content_tab)
         self.content_game_combo.setMinimumWidth(170)
-        self.content_game_combo.addItem("未选择已安装版本", userData="")
+        self.content_game_combo.setToolTip("按具体游戏版本过滤搜索结果")
         filter_bar.addWidget(self.content_game_combo)
+
+        target_label = CaptionLabel("安装到", self.content_tab)
+        target_label.setTextColor(palette()["secondary"], palette()["secondary"])
+        filter_bar.addWidget(target_label)
+        self.content_target_combo = ComboBox(self.content_tab)
+        self.content_target_combo.setMinimumWidth(170)
+        self.content_target_combo.setToolTip("模组会被放进这个实例的 mods 目录")
+        filter_bar.addWidget(self.content_target_combo)
 
         self.loader_label = CaptionLabel("加载器", self.content_tab)
         self.loader_label.setTextColor(palette()["secondary"], palette()["secondary"])
@@ -534,31 +550,67 @@ class VersionsPage(QWidget):
         self.content_status.setText("输入关键词开始搜索")
 
     def set_content_game_version(self, version_id: str) -> None:
-        """把当前选中的版本同步到筛选下拉框。"""
+        """把当前选中的版本同步到「安装到」下拉框。"""
         if not version_id:
             return
-        index = self.content_game_combo.findData(version_id)
+        index = self.content_target_combo.findData(version_id)
         if index >= 0:
-            self.content_game_combo.setCurrentIndex(index)
+            self.content_target_combo.setCurrentIndex(index)
 
     def populate_game_versions(self, versions: list[dict]) -> None:
-        """游戏版本下拉框只列出已安装的版本。"""
+        """记住完整版本清单，重建「游戏版本」与「安装到」两个下拉框。"""
+        self._all_versions = list(versions)
+        self._rebuild_game_options()
+        self._rebuild_target_options()
+
+    def _rebuild_game_options(self) -> None:
+        """按「全部 / 全部正式版」重建游戏版本筛选下拉框。
+
+        这里是搜索过滤条件，不要求已安装。
+        """
+        scope = self.content_scope_combo.currentData() or "all"
         current = self.content_game_combo.currentData()
+        versions = getattr(self, "_all_versions", [])
+
         self.content_game_combo.blockSignals(True)
         self.content_game_combo.clear()
-        self.content_game_combo.addItem("未选择已安装版本", userData="")
-        installed = [row for row in versions if row.get("installed")]
-        for row in installed:
+        self.content_game_combo.addItem("全部版本", userData="")
+
+        for row in versions:
             version_id = str(row.get("id") or "")
-            if version_id:
-                self.content_game_combo.addItem(version_id, userData=version_id)
+            if not version_id:
+                continue
+            if scope == "release" and str(row.get("type") or "") != "release":
+                continue
+            suffix = "（已安装）" if row.get("installed") else ""
+            self.content_game_combo.addItem(f"{version_id}{suffix}", userData=version_id)
+
         if current:
             index = self.content_game_combo.findData(current)
             if index >= 0:
                 self.content_game_combo.setCurrentIndex(index)
-        elif installed:
-            self.content_game_combo.setCurrentIndex(1)
         self.content_game_combo.blockSignals(False)
+
+    def _rebuild_target_options(self) -> None:
+        """「安装到」只列已安装版本，决定模组落到哪个 mods 目录。"""
+        current = self.content_target_combo.currentData()
+        installed = [row for row in getattr(self, "_all_versions", []) if row.get("installed")]
+
+        self.content_target_combo.blockSignals(True)
+        self.content_target_combo.clear()
+        if not installed:
+            self.content_target_combo.addItem("（尚未安装任何版本）", userData="")
+        else:
+            for row in installed:
+                version_id = str(row.get("id") or "")
+                if version_id:
+                    self.content_target_combo.addItem(version_id, userData=version_id)
+
+        if current:
+            index = self.content_target_combo.findData(current)
+            if index >= 0:
+                self.content_target_combo.setCurrentIndex(index)
+        self.content_target_combo.blockSignals(False)
 
     def refresh_content_versions(self) -> None:
         """安装/卸载版本后刷新资源页的版本下拉框。"""
@@ -579,7 +631,13 @@ class VersionsPage(QWidget):
             )
 
     def _resolved_game_version(self) -> str:
+        """搜索时用于过滤的游戏版本，空表示不限制。"""
         selected = self.content_game_combo.currentData()
+        return str(selected) if selected else ""
+
+    def _resolved_target_version(self) -> str:
+        """安装目标实例（必须是已安装版本）。"""
+        selected = self.content_target_combo.currentData()
         return str(selected) if selected else ""
 
     def _search_content(self) -> None:
@@ -643,8 +701,8 @@ class VersionsPage(QWidget):
         layout.setContentsMargins(14, 10, 12, 10)
         layout.setSpacing(12)
 
-        icon = IconWidget(FluentIcon.ZIP_FOLDER if kind == "resourcepack" else FluentIcon.APPLICATION, row)
-        icon.setFixedSize(22, 22)
+        icon = ProjectIcon(44, row)
+        icon.set_project(hit.get("title") or "", str(hit.get("icon_url") or ""))
         layout.addWidget(icon, 0, Qt.AlignTop)
 
         texts = QVBoxLayout()
@@ -684,18 +742,21 @@ class VersionsPage(QWidget):
         button,
     ) -> None:
         """弹出版本表，选好后把下载任务交给任务管理页。"""
-        if not game_version:
+        target = self._resolved_target_version()
+        if not target:
             InfoBar.warning(
-                "先选择版本",
-                "请在上方「游戏版本」里选择一个已安装的版本，模组才能装到正确位置。",
+                "先安装游戏版本",
+                "「下载 → 游戏版本」里还没有已安装的版本，先把游戏装好再来装模组。",
                 parent=self,
                 duration=5000,
             )
             return
 
+        # 版本表按目标实例的游戏版本筛选，避免装错配方
+        lookup_version = game_version or target
         from ..dialogs import VersionPickerDialog
 
-        dialog = VersionPickerDialog(hit, game_version, loader, self.service, self.window())
+        dialog = VersionPickerDialog(hit, lookup_version, loader, self.service, self.window())
         if not dialog.exec():
             return
         chosen = dialog.selected_version
@@ -708,9 +769,9 @@ class VersionsPage(QWidget):
             {
                 "project": hit,
                 "kind": kind,
-                "game_version": game_version,
+                "game_version": lookup_version,
                 "loader": loader,
                 "chosen": chosen,
-                "version_id": self._resolved_game_version() or None,
+                "version_id": target,
             }
         )
