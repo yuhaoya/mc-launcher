@@ -16,12 +16,16 @@ from qfluentwidgets import (
     CaptionLabel,
     FluentIcon,
     IconWidget,
+    InfoBadge,
+    InfoLevel,
+    PillPushButton,
     PrimaryPushButton,
     PushButton,
     SettingCard,
     SimpleCardWidget,
     StrongBodyLabel,
     TitleLabel,
+    TransparentPushButton,
 )
 
 from .theme import palette
@@ -321,30 +325,24 @@ class AccountRow(QFrame):
         layout.addStretch(1)
 
         if data.get("active"):
-            badge = QLabel("当前", self)
-            badge.setStyleSheet(
-                f"background: {palette()['success']}22; color: {palette()['success']};"
-                "border-radius: 6px; padding: 2px 10px; font-size: 8pt; font-weight: 600;"
-            )
+            badge = PillPushButton("当前", self)
+            badge.setCheckable(True)
+            badge.setChecked(True)
+            badge.setFixedHeight(26)
+            badge.setCursor(Qt.ArrowCursor)
+            # 只作为状态标识，点击后立刻恢复选中态
+            badge.clicked.connect(lambda: badge.setChecked(True))
             layout.addWidget(badge)
         else:
-            # 👇 替换为 PrimaryPushButton，自动跟随主题色
-            switch_button = PrimaryPushButton("切换到此账号", self)
+            switch_button = PushButton("切换到此处", self)
             switch_button.setFixedHeight(30)
             switch_button.setCursor(Qt.PointingHandCursor)
             switch_button.clicked.connect(lambda: self.switchRequested.emit(self.account_name))
             layout.addWidget(switch_button)
 
-        # 👇 替换为 Fluent 的 PushButton，并去除边框，改为纯文本红色
-        remove_button = PushButton("删除", self)
+        remove_button = TransparentPushButton(FluentIcon.DELETE, "删除", self)
         remove_button.setFixedHeight(30)
         remove_button.setCursor(Qt.PointingHandCursor)
-        remove_button.setStyleSheet(
-            """
-            PushButton { color: #C42B1C; }
-            PushButton:hover { background: rgba(196, 43, 28, 0.1); }
-            """
-        )
         remove_button.clicked.connect(lambda: self.removeRequested.emit(self.account_name))
         layout.addWidget(remove_button)
 

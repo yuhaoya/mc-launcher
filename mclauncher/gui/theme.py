@@ -4,7 +4,7 @@ import sys
 
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import QApplication
-from qfluentwidgets import Theme, isDarkTheme, setTheme, setThemeColor
+from qfluentwidgets import Theme, isDarkTheme, setTheme, setThemeColor, themeColor
 
 ACCENTS: dict[str, str] = {
     "blue": "#0F6CBD",
@@ -23,6 +23,25 @@ THEMES = {
 def apply_theme(mode: str = "auto", accent: str = "blue") -> None:
     setTheme(THEMES.get(mode, Theme.AUTO))
     setThemeColor(ACCENTS.get(accent, ACCENTS["blue"]))
+
+
+def accent_color(dark: bool | None = None) -> QColor:
+    """跟随用户所选主题色的强调色。
+
+    深色主题下自动提亮，否则深绿/深紫压在黑底上几乎看不清。
+    """
+    color = QColor(themeColor())
+    if dark is None:
+        dark = isDarkTheme()
+    if dark:
+        h, s, v, a = color.getHsvF()
+        color.setHsvF(h, min(1.0, s * 0.8), min(1.0, v + 0.35), a)
+    return color
+
+
+def accent_pair() -> tuple[QColor, QColor]:
+    """(浅色主题用色, 深色主题用色)。"""
+    return accent_color(False), accent_color(True)
 
 
 def rgba(hex_color: str, alpha: float) -> str:
@@ -62,7 +81,7 @@ def palette() -> dict[str, str]:
         "secondary": "#C8C8C8" if dark else "#5C5C5C",
         "tertiary": "#9A9A9A" if dark else "#8A8A8A",
         "border": "#3D3D3D" if dark else "#E5E5E5",
-        "accent": "#4CC2FF" if dark else "#0F6CBD",
+        "accent": accent_color().name(),
         "success": "#6CCB5F",
         "warning": "#FCE100",
         "danger": "#FF99A4" if dark else "#C42B1C",

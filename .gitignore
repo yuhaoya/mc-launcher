@@ -37,6 +37,9 @@ venv_win7/
 .ui-net-config/
 .ui-tui-test/
 .ui-tui-cfg/
+.ui-*/
+shot-*.png
+cand*.png
 Thumbs.db
 *.pyc38
 win7-*.png

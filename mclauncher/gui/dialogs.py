@@ -18,10 +18,11 @@ from qfluentwidgets import (
     StrongBodyLabel,
     SubtitleLabel,
     TreeWidget,
+    themeColor,
 )
 
 from .icons import ProjectIcon
-from .theme import palette
+from .theme import accent_pair, palette
 from .workers import Worker
 
 RELEASE_LABELS = {"release": "正式版", "beta": "测试版", "alpha": "内测版"}
@@ -123,7 +124,7 @@ class VersionPickerDialog(MessageBoxBase):
         self.tree.setHeaderHidden(True)
         self.tree.setBorderVisible(True)
         self.tree.setBorderRadius(8)
-        self.tree.setCheckedColor(QColor("#0F6CBD"), QColor("#4CC2FF"))
+        self.tree.setCheckedColor(*accent_pair())
         self.tree.itemSelectionChanged.connect(self._on_tree_selection)
         left.addWidget(self.tree, 1)
         body.addLayout(left)
@@ -230,7 +231,7 @@ class VersionPickerDialog(MessageBoxBase):
             font = parent.font(0)
             font.setBold(True)
             parent.setFont(0, font)
-            parent.setForeground(0, QBrush(QColor("#5A5A5A")))
+            parent.setForeground(0, QBrush(QColor(palette()["tertiary"])))
             parent.setFlags(parent.flags() & ~Qt.ItemFlag.ItemIsSelectable)
             parent.setExpanded(True)
 
@@ -339,7 +340,7 @@ class VersionPickerDialog(MessageBoxBase):
             font = title.font()
             font.setWeight(QFont.DemiBold)
             title.setFont(font)
-            title.setTextColor(QColor("#0F6CBD"), QColor("#4CC2FF"))
+            title.setTextColor(*accent_pair())
         layout.addWidget(title)
 
         meta_parts = [RELEASE_LABELS.get(str(version.get("release_type")), "正式版")]

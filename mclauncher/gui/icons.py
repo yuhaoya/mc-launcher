@@ -10,6 +10,7 @@ from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequ
 from PySide6.QtWidgets import QLabel
 
 from ..paths import default_config_dir
+from .theme import accent_color
 
 _ICON_SIZE = 48
 
@@ -119,7 +120,6 @@ class ProjectIcon(QLabel):
         self._size = size
         self._url = ""
         self._fallback_text = "?"
-        self._fallback_color = QColor("#0F6CBD")
         self.setFixedSize(size, size)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setScaledContents(False)
@@ -163,11 +163,16 @@ class ProjectIcon(QLabel):
     def paintEvent(self, event) -> None:
         if not self.pixmap() or self.pixmap().isNull():
             # 没有图标时画一个渐变底 + 首字母，比空白方块好看
+            accent = accent_color()
+            top = QColor(accent)
+            h, s, v, a = top.getHsvF()
+            top.setHsvF(h, max(0.0, s * 0.75), min(1.0, v + 0.25), a)
+
             painter = QPainter(self)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             gradient = QLinearGradient(0, 0, self._size, self._size)
-            gradient.setColorAt(0.0, QColor("#2B88D8"))
-            gradient.setColorAt(1.0, QColor("#0F6CBD"))
+            gradient.setColorAt(0.0, top)
+            gradient.setColorAt(1.0, accent)
             painter.setBrush(gradient)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawRoundedRect(QRectF(0, 0, self._size, self._size), 10, 10)
