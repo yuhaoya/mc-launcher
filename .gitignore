@@ -40,6 +40,10 @@ venv_win7/
 .ui-*/
 shot-*.png
 cand*.png
+.site-shots/
+.site-cfg/
+.site-render.py
+.probe.js
 Thumbs.db
 *.pyc38
 win7-*.png
